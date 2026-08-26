@@ -305,6 +305,10 @@ export default function App() {
                 setCurrentPathway(updatedPath);
                 LocalStorageManager.savePathway(updatedPath);
               }}
+              onUpdateProfile={updatedProfile => {
+                setCurrentLearner(updatedProfile);
+                LocalStorageManager.saveLearner(updatedProfile);
+              }}
               onRetakeDiagnostic={() => {
                 handleStartDiagnostic({
                   name: currentLearner.name,

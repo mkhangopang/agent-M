@@ -4,13 +4,14 @@
  * Provides export/import functions for JSON profiles and local database backups.
  */
 
-import { DiagnosticState, LearnerProfile, LearningPathway, SpacedReviewItem } from '../types';
+import { DiagnosticState, LearnerProfile, LearningPathway, PathwaySnapshot, SpacedReviewItem } from '../types';
 
 const LEARNERS_KEY = 'plia_learners_v1';
 const CURRENT_LEARNER_KEY = 'plia_current_learner_id_v1';
 const ACTIVE_DIAGNOSTIC_KEY = 'plia_active_diagnostic_v1';
 const PATHWAYS_KEY = 'plia_pathways_v1';
 const SPACED_REVIEWS_KEY = 'plia_spaced_reviews_v1';
+const SNAPSHOTS_KEY = 'plia_snapshots_v1';
 
 export class LocalStorageManager {
   // --- Learners ---
@@ -149,6 +150,40 @@ export class LocalStorageManager {
     this.saveSpacedReviews(learnerId, reviews);
   }
 
+  // --- Pathway & Mastery Snapshots ---
+  public static getAllSnapshots(learnerId?: string): PathwaySnapshot[] {
+    try {
+      const data = localStorage.getItem(SNAPSHOTS_KEY);
+      const list: PathwaySnapshot[] = data ? JSON.parse(data) : [];
+      if (learnerId) {
+        return list.filter(s => s.learnerId === learnerId);
+      }
+      return list;
+    } catch {
+      return [];
+    }
+  }
+
+  public static saveSnapshot(snapshot: PathwaySnapshot): void {
+    const list = this.getAllSnapshots();
+    const existingIdx = list.findIndex(s => s.id === snapshot.id);
+    if (existingIdx >= 0) {
+      list[existingIdx] = snapshot;
+    } else {
+      list.unshift(snapshot); // most recent first
+    }
+    localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(list));
+  }
+
+  public static deleteSnapshot(snapshotId: string): void {
+    const list = this.getAllSnapshots().filter(s => s.id !== snapshotId);
+    localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(list));
+  }
+
+  public static getSnapshotById(snapshotId: string): PathwaySnapshot | undefined {
+    return this.getAllSnapshots().find(s => s.id === snapshotId);
+  }
+
   // --- Export & Import ---
   public static exportFullData(): string {
     const exportObject = {
@@ -156,6 +191,7 @@ export class LocalStorageManager {
       exportedAt: new Date().toISOString(),
       learners: this.getAllLearners(),
       pathways: this.getAllPathways(),
+      snapshots: this.getAllSnapshots(),
       currentLearnerId: this.getCurrentLearnerId(),
     };
     return JSON.stringify(exportObject, null, 2);
@@ -189,6 +225,16 @@ export class LocalStorageManager {
         localStorage.setItem(PATHWAYS_KEY, JSON.stringify(merged));
       }
 
+      if (parsed.snapshots && Array.isArray(parsed.snapshots)) {
+        const existingSnapshots = this.getAllSnapshots();
+        for (const snap of parsed.snapshots) {
+          if (!existingSnapshots.some(s => s.id === snap.id)) {
+            existingSnapshots.push(snap);
+          }
+        }
+        localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(existingSnapshots));
+      }
+
       return {
         success: true,
         message: `Successfully imported ${parsed.learners.length} learner profile(s).`,
@@ -205,5 +251,6 @@ export class LocalStorageManager {
     localStorage.removeItem(CURRENT_LEARNER_KEY);
     localStorage.removeItem(ACTIVE_DIAGNOSTIC_KEY);
     localStorage.removeItem(PATHWAYS_KEY);
+    localStorage.removeItem(SNAPSHOTS_KEY);
   }
 }

@@ -251,6 +251,25 @@ export interface SpacedReviewItem {
   status: 'due' | 'upcoming' | 'completed';
 }
 
+export interface PathwaySnapshot {
+  id: string;
+  learnerId: string;
+  subject: string;
+  name: string;
+  note?: string;
+  timestamp: string;
+  pathway: LearningPathway;
+  bloomProfile: BloomProfile;
+  subjectMastery: {
+    overallMastery: number;
+    domains: Record<string, SubjectMasteryDomain>;
+  };
+  learningStage: CognitiveStageNumber;
+  stageName: string;
+  currentPhaseIndex: number;
+  overallMastery: number;
+}
+
 export interface VectorDocument {
   id: string;
   subject: string;
