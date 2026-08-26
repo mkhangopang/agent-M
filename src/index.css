@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #020617;
+    color: #f8fafc;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+.sleek-glow-indigo {
+  box-shadow: 0 0 16px -2px rgba(99, 102, 241, 0.25);
+}
+
+.sleek-glow-emerald {
+  box-shadow: 0 0 16px -2px rgba(16, 185, 129, 0.25);
+}
+
+.sleek-border-glow:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 20px -4px rgba(99, 102, 241, 0.2);
+}

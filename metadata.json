@@ -1,0 +1,6 @@
+{
+  "name": "PLIA - Personalized Learning Intelligence Agent",
+  "description": "Adaptive AI tutoring and diagnostic intelligence agent operating 100% locally with Ollama and an embedded local vector database.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
