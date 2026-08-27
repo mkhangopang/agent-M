@@ -82,7 +82,8 @@ export type QuestionType =
   | 'evidence_evaluation'
   | 'problem_solving'
   | 'transfer'
-  | 'creation';
+  | 'creation'
+  | 'open_response';
 
 export type DifficultyLevel = 'easy' | 'medium' | 'difficult';
 
@@ -292,10 +293,20 @@ export interface VectorSearchResult {
 export interface OllamaConfig {
   baseUrl: string;
   selectedModel: string;
+  embeddingModel: string;
   availableModels: string[];
   isReachable: boolean;
   lastChecked: string;
   mockMode: boolean;
+  latencyMs?: number;
+}
+
+export interface BackendConfig {
+  baseUrl: string;
+  isConnected: boolean;
+  lastChecked: string;
+  databasePath?: string;
+  learnerCount?: number;
   latencyMs?: number;
 }
 

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "build": {
+    "beforeDevCommand": "npm run build",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:3000",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "PLIA",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "http": {
+        "all": true,
+        "request": true,
+        "scope": ["http://localhost:11434/*", "http://localhost:8000/*", "http://127.0.0.1:11434/*", "http://127.0.0.1:8000/*"]
+      },
+      "fs": {
+        "all": true,
+        "scope": ["$APPDATA/*", "$DOWNLOAD/*"]
+      },
+      "shell": {
+        "all": false,
+        "open": true,
+        "sidecar": true,
+        "scope": [
+          { "name": "ollama", "cmd": "ollama", "args": true },
+          { "name": "python_plia", "cmd": "python", "args": ["app.py"] }
+        ]
+      },
+      "dialog": {
+        "all": true,
+        "open": true,
+        "save": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "Education",
+      "copyright": "PLIA Offline Local AI",
+      "deb": {
+        "depends": []
+      },
+      "externalBin": [],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.plia.desktop",
+      "longDescription": "PLIA (Personalized Learning Intelligence Agent) is a 100% offline-first cognitive AI tutor and diagnostic engine powered by Ollama and an embedded local vector database.",
+      "macOS": {
+        "frameworks": [],
+        "minimumSystemVersion": "",
+        "exceptionDomain": "",
+        "signingIdentity": null,
+        "entitlements": null
+      },
+      "resources": [],
+      "shortDescription": "Offline-first Personalized Learning Intelligence Agent",
+      "targets": "all",
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": ""
+      }
+    },
+    "security": {
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:11434 http://127.0.0.1:11434 http://localhost:8000 http://127.0.0.1:8000 data: blob:;"
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "PLIA — Personalized Learning Intelligence Agent",
+        "width": 1400,
+        "minWidth": 1024,
+        "minHeight": 700
+      }
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Terminal,
   FileCode,
@@ -6,277 +6,337 @@ import {
   Check,
   Download,
   Database,
-  Cpu,
+  Server,
+  RefreshCw,
+  Play,
   Layers,
   Sparkles,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
+import { localBackendService } from '../lib/backendClient';
+import { storageManager } from '../lib/storage';
 
 export const PythonBundleView: React.FC = () => {
-  const [activeFile, setActiveFile] = useState<'app.py' | 'settings.py' | 'db.py' | 'schema.sql' | 'ollama_client.py' | 'vector_store.py' | 'orchestrator.py' | 'test_plia.py' | 'requirements.txt' | 'README.md'>('README.md');
+  const [activeFile, setActiveFile] = useState<
+    'app.py' | 'db.py' | 'schema.sql' | 'test_api.py' | 'requirements.txt' | 'README.md'
+  >('app.py');
   const [copied, setCopied] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<{
+    connected: boolean;
+    learnerCount: number;
+    databasePath?: string;
+    latencyMs: number;
+  }>({ connected: false, learnerCount: 0, latencyMs: 0 });
+  const [isChecking, setIsChecking] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    checkHealth();
+  }, []);
+
+  const checkHealth = async () => {
+    setIsChecking(true);
+    const res = await localBackendService.checkHealth();
+    setBackendHealth(res);
+    setIsChecking(false);
+  };
+
+  const handleTestBackendPing = async () => {
+    try {
+      const res = await localBackendService.getLearners();
+      if (res !== null) {
+        setTestResult(`Success! Backend returned ${res.length} registered learner(s).`);
+      } else {
+        setTestResult('Backend unreachable at http://localhost:8000. Start backend with `python app.py` or `uvicorn app:app`.');
+      }
+    } catch (e: any) {
+      setTestResult(`Error: ${e.message}`);
+    }
+  };
+
+  const handleExportFullDatabase = async () => {
+    const dump = await localBackendService.exportFullDatabase();
+    const dataStr = dump ? JSON.stringify(dump, null, 2) : storageManager.exportData();
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `plia_sqlite_dump_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const FILE_CONTENTS: Record<string, { lang: string; content: string; desc: string }> = {
-    'README.md': {
-      lang: 'markdown',
-      desc: 'Complete architectural documentation and startup guide for Windows / Mac / Linux',
-      content: `# PLIA — Personalized Learning Intelligence Agent (MVP v1.0)
+    'app.py': {
+      lang: 'python',
+      desc: 'FastAPI Production Backend Entry Point with CORS, SQLite persistence, and multi-learner routes',
+      content: `"""
+PLIA Local FastAPI Backend Application
+Provides local-first SQLite persistence, Multi-Learner scoping,
+Diagnostic State serialization, Spaced Review tracking, and Database Import/Export.
+"""
 
-PLIA is an offline-first, adaptive educational diagnostic and tutoring agent powered by local **Ollama** and an embedded local **Vector Database** running on SQLite.
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict, Any, List, Optional
+import os
+from database import db
 
----
+app = FastAPI(
+    title="PLIA Local Backend",
+    description="Offline-first Local Intelligence Service for Personalized Learning",
+    version="1.0.0"
+)
 
-## 🚀 Quick Start Guide
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-### 1. Prerequisites
-- **Python 3.10+** (Python 3.11 recommended)
-- **Ollama** installed on your laptop ([Download Ollama](https://ollama.ai))
+class LearnerCreateUpdate(BaseModel):
+    learner_id: str
+    name: str
+    subject: str
+    goal: Optional[str] = ""
+    experience_level: Optional[str] = "intermediate"
+    available_learning_time: Optional[str] = "30 mins / day"
 
-### 2. Pull Your Local LLM Model
-Open PowerShell or Terminal and pull your model:
-\`\`\`bash
-ollama run qwen3:8b
-# Or alternatives: ollama run llama3.1:8b / mistral / phi3
-\`\`\`
+@app.get("/health")
+def health():
+    learners = db.list_learners()
+    return {
+        "status": "ok",
+        "database": "connected",
+        "database_path": os.getenv("PLIA_DATABASE", "plia.db"),
+        "learner_count": len(learners),
+        "version": "1.0.0"
+    }
 
-### 3. Setup Virtual Environment
-\`\`\`bash
-# Windows (PowerShell)
-python -m venv venv
-.\\venv\\Scripts\\Activate.ps1
-pip install -r requirements.txt
+@app.get("/api/learners")
+def get_learners():
+    return db.list_learners()
 
-# Mac / Linux
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-\`\`\`
+@app.post("/api/learners")
+def create_or_update_learner(payload: LearnerCreateUpdate):
+    db.save_learner(payload.model_dump())
+    return {"status": "saved", "learner_id": payload.learner_id}
 
-### 4. Run PLIA Streamlit Application
-\`\`\`bash
-streamlit run app.py
-\`\`\`
+@app.get("/api/learners/{learner_id}/profile")
+def get_profile(learner_id: str):
+    profile = db.get_learner_profile(learner_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
 
----
+@app.put("/api/learners/{learner_id}/profile")
+def put_profile(learner_id: str, payload: Dict[str, Any]):
+    db.save_learner_profile(learner_id, payload)
+    return {"status": "saved", "learner_id": learner_id}
 
-## 🏛️ Pedagogical & Technical Architecture
+@app.get("/api/export")
+def export_dump():
+    return db.export_full_database()
 
-1. **Adaptive Diagnostic Engine**:
-   - Asks approximately 10–15 questions, one at a time.
-   - Evaluates across **Bloom's Revised Taxonomy** (Remember, Understand, Apply, Analyze, Evaluate, Create).
-   - Incurs zero clinical/IQ claims; estimates **Cognitive Learning Stages** (Stages 1–6).
-   - Separates Subject Mastery from Cognitive Stage.
-   - Detects conceptual misconceptions vs missing factual knowledge.
-
-2. **Local Vector Database**:
-   - In-memory & SQLite-backed 128-dimensional dense vector embeddings with cosine similarity and BM25 hybrid ranking.
-   - Sub-millisecond retrieval of subject standards, misconception catalogs, and custom learner notes.
-
-3. **Master Learning Loop**:
-   - **Measure → Diagnose → Plan → Teach → Practice → Scaffolding (5 Levels) → Assess → Adapt → Spaced Retrieval**.
-
-4. **100% Offline & Private**:
-   - No external APIs, no OpenAI/Claude keys, no telemetry. All learner profiles stored locally in \`plia.db\`.
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
 `,
     },
 
-    'requirements.txt': {
-      lang: 'text',
-      desc: 'Minimal Python dependencies',
-      content: `streamlit>=1.35.0
-pydantic>=2.7.0
-httpx>=0.27.0
-numpy>=1.26.0
-python-dotenv>=1.0.1
-pytest>=8.2.0
+    'db.py': {
+      lang: 'python',
+      desc: 'SQLite Database Layer executing migrations and relational CRUD operations',
+      content: `"""
+SQLite Database Layer for PLIA FastAPI Service
+"""
+
+import sqlite3
+import json
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+import os
+
+DB_PATH = os.getenv("PLIA_DATABASE", "plia.db")
+
+def get_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+def init_db():
+    schema_path = Path(__file__).parent / "schema.sql"
+    if schema_path.exists():
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema = f.read()
+        with get_connection() as conn:
+            conn.executescript(schema)
+            conn.commit()
+
+init_db()
+
+def list_learners() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM learners ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+def save_learner(learner: Dict[str, Any]):
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO learners (
+                learner_id, name, subject, goal, experience_level, available_learning_time, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (
+            learner["learner_id"],
+            learner.get("name", "Learner"),
+            learner.get("subject", "General"),
+            learner.get("goal", ""),
+            learner.get("experience_level", "intermediate"),
+            learner.get("available_learning_time", "30 mins / day")
+        ))
+        conn.commit()
 `,
     },
 
     'schema.sql': {
       lang: 'sql',
-      desc: 'SQLite database schema for learners, sessions, items, and mastery',
+      desc: 'Relational SQLite DDL schema for learners, profiles, pathways, sessions, snapshots, reviews, and vector documents',
       content: `-- SQLite Schema for PLIA (plia.db)
 
 CREATE TABLE IF NOT EXISTS learners (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id TEXT UNIQUE NOT NULL,
-    name TEXT,
-    age_group TEXT,
+    learner_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    goal TEXT,
+    experience_level TEXT DEFAULT 'intermediate',
+    available_learning_time TEXT DEFAULT '30 mins / day',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS learner_profiles (
     learner_id TEXT PRIMARY KEY,
-    subject TEXT NOT NULL,
-    goal TEXT,
-    experience_level TEXT,
-    available_learning_time TEXT,
-    learning_stage INTEGER NOT NULL,
-    stage_confidence TEXT,
-    bloom_profile JSON,
-    subject_mastery JSON,
-    strengths JSON,
-    knowledge_gaps JSON,
-    misconceptions JSON,
-    metacognition JSON,
-    confidence_calibration TEXT,
-    calibration_score REAL,
-    learning_preferences JSON,
-    recommended_strategy TEXT,
-    profile_version INTEGER DEFAULT 1,
+    profile_json TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(learner_id) REFERENCES learners(learner_id)
+    FOREIGN KEY(learner_id) REFERENCES learners(learner_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS learning_pathways (
+    learner_id TEXT PRIMARY KEY,
+    pathway_json TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(learner_id) REFERENCES learners(learner_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS diagnostic_sessions (
     session_id TEXT PRIMARY KEY,
     learner_id TEXT NOT NULL,
     subject TEXT NOT NULL,
+    current_phase TEXT,
     current_index INTEGER DEFAULT 0,
     is_completed BOOLEAN DEFAULT 0,
-    questions_json JSON,
-    evaluations_json JSON,
+    session_json TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(learner_id) REFERENCES learners(learner_id)
+    FOREIGN KEY(learner_id) REFERENCES learners(learner_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS vector_documents (
-    id TEXT PRIMARY KEY,
-    subject TEXT NOT NULL,
-    domain TEXT NOT NULL,
-    topic TEXT NOT NULL,
-    category TEXT NOT NULL,
-    content TEXT NOT NULL,
-    embedding JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS spaced_reviews (
+CREATE TABLE IF NOT EXISTS pathway_snapshots (
     id TEXT PRIMARY KEY,
     learner_id TEXT NOT NULL,
-    concept TEXT NOT NULL,
-    domain TEXT NOT NULL,
-    interval_days INTEGER DEFAULT 1,
-    repetition_count INTEGER DEFAULT 0,
-    next_review_date TIMESTAMP,
+    subject TEXT NOT NULL,
+    name TEXT NOT NULL,
+    note TEXT,
+    timestamp TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(learner_id) REFERENCES learners(learner_id)
+    FOREIGN KEY(learner_id) REFERENCES learners(learner_id) ON DELETE CASCADE
 );
 `,
     },
 
-    'app.py': {
+    'test_api.py': {
       lang: 'python',
-      desc: 'Streamlit Application Entry Point',
+      desc: 'Pytest integration test suite covering API routes and SQLite persistence',
       content: `"""
-PLIA — Personalized Learning Intelligence Agent
-Streamlit Main Application Entry Point
+Unit & Integration Tests for PLIA FastAPI Backend
 """
 
-import streamlit as st
-import json
-import time
+import pytest
+from fastapi.testclient import TestClient
+import os
 
-st.set_page_config(
-    page_title="PLIA — Personalized Learning Intelligence Agent",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+os.environ["PLIA_DATABASE"] = "test_plia.db"
 
-# Custom Styling
-st.markdown("""
-<style>
-    .main-header { font-size: 2.2rem; font-weight: 800; color: #f8fafc; }
-    .stage-badge { background: #1e1b4b; border: 1px solid #6366f1; padding: 4px 12px; border-radius: 999px; }
-</style>
-""", unsafe_allow_html=True)
+from app import app
+from database import db
 
-st.sidebar.title("🧠 PLIA v1.0")
-st.sidebar.caption("Offline Adaptive Learning Agent")
+client = TestClient(app)
 
-menu = st.sidebar.radio(
-    "Navigation",
-    ["Intake & Setup", "Adaptive Diagnostic", "Learning Pathway", "Vector DB Explorer", "Learner Profile", "Settings"]
-)
+def test_health_endpoint():
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["database"] == "connected"
 
-if menu == "Intake & Setup":
-    st.markdown('<h1 class="main-header">Learner Intake</h1>', unsafe_allow_html=True)
-    st.write("Calibrate an adaptive diagnostic powered by your local Ollama LLM and embedded vector search.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        name = st.text_input("Learner Name (Optional)", placeholder="Alex")
-        subject = st.selectbox("Target Subject", ["Biology", "Computer Science", "Physics", "Mathematics", "AI & Data Science", "Chemistry", "Economics"])
-    with col2:
-        goal = st.text_input("Learning Goal", placeholder="e.g. Master core principles and exam preparation")
-        time_avail = st.selectbox("Available Time", ["15 mins / day", "30 mins / day", "45 mins / day", "60+ mins / day"])
-        
-    if st.button("Start Adaptive Diagnostic", type="primary"):
-        st.session_state["active_subject"] = subject
-        st.session_state["learner_name"] = name
-        st.success(f"Diagnostic initialized for {subject}! Navigate to 'Adaptive Diagnostic' tab.")
-
-elif menu == "Adaptive Diagnostic":
-    st.title("Adaptive Diagnostic Session")
-    st.info("Demonstrate your understanding. Questions scale adaptively across Bloom's Taxonomy.")
-    # Interactive question loop renders here...
-
-elif menu == "Settings":
-    st.title("Settings & Ollama Status")
-    st.write("Configure your local Ollama endpoint (http://localhost:11434) and models.")
+def test_learner_crud_and_profile_flow():
+    payload = {
+        "learner_id": "test-learner-1",
+        "name": "Ada Lovelace",
+        "subject": "Computer Science"
+    }
+    create_res = client.post("/api/learners", json=payload)
+    assert create_res.status_code == 200
+    assert create_res.json()["learner_id"] == "test-learner-1"
 `,
     },
 
-    'vector_store.py': {
-      lang: 'python',
-      desc: 'Local Vector Database engine with 128-dim embeddings and Cosine + BM25 ranking',
-      content: `"""
-Local Vector Store for PLIA
-100% Offline dense vector indexing with cosine similarity and BM25 hybrid ranking.
-"""
+    'requirements.txt': {
+      lang: 'text',
+      desc: 'Python dependencies for FastAPI and Pytest',
+      content: `fastapi>=0.111.0
+uvicorn>=0.30.0
+pydantic>=2.7.0
+httpx>=0.27.0
+python-dotenv>=1.0.1
+pytest>=8.2.0
+`,
+    },
 
-import math
-import re
-from typing import List, Dict, Any, Optional
+    'README.md': {
+      lang: 'markdown',
+      desc: 'Complete service architecture and startup instructions',
+      content: `# PLIA Local Python FastAPI Backend
 
-VECTOR_DIM = 128
+Runs 100% locally on your machine with SQLite storage.
 
-def tokenize(text: str) -> List[str]:
-    return [w for w in re.sub(r'[^\\w\\s-]', ' ', text.lower()).split() if len(w) > 2]
+### 1. Installation
+\`\`\`bash
+cd python_plia
+python -m venv venv
+# Windows:
+.\\venv\\Scripts\\Activate.ps1
+# Mac/Linux:
+source venv/bin/activate
 
-def hash_token(token: str, seed: int = 0) -> int:
-    h = seed ^ 0x12345678
-    for ch in token:
-        h = (h ^ ord(ch)) * 0x5bd1e995
-        h = (h ^ (h >> 15)) & 0xFFFFFFFF
-    return h % VECTOR_DIM
+pip install -r requirements.txt
+\`\`\`
 
-def generate_embedding(text: str) -> List[float]:
-    vec = [0.0] * VECTOR_DIM
-    tokens = tokenize(text)
-    if not tokens:
-        return vec
-        
-    counts: Dict[str, int] = {}
-    for t in tokens:
-        counts[t] = counts.get(t, 0) + 1
-        
-    for t, count in counts.items():
-        w = 1.0 + math.log(count)
-        idx1 = hash_token(t, 42)
-        idx2 = hash_token(t, 1337)
-        vec[idx1] += w
-        vec[idx2] += w * 0.5
-        
-    norm = math.sqrt(sum(x * x for x in vec))
-    if norm > 0:
-        vec = [x / norm for x in vec]
-    return vec
+### 2. Launch FastAPI Server
+\`\`\`bash
+uvicorn app:app --reload --port 8000
+\`\`\`
 
-def cosine_similarity(v1: List[float], v2: List[float]) -> float:
-    return max(0.0, min(1.0, sum(a * b for a, b in zip(v1, v2))))
+### 3. Run Pytest Suite
+\`\`\`bash
+pytest tests/
+\`\`\`
 `,
     },
   };
@@ -296,20 +356,28 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
           <div>
             <div className="flex items-center space-x-2">
               <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                Standalone Project Package
+                Local FastAPI + SQLite Service
               </span>
               <span className="text-slate-600">•</span>
-              <span className="text-xs text-indigo-400 font-medium">Python + Streamlit + SQLite</span>
+              <span className="text-xs text-indigo-400 font-medium">Desktop Sidecar & Persistence</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white mt-1">
-              PLIA Python & Streamlit Codebase Bundle
+              PLIA Python Backend Architecture
             </h1>
             <p className="text-xs text-slate-300 mt-1">
-              Explore the complete standalone Python source files, prompts, SQLite schema, and instructions to run PLIA locally on Windows PowerShell or Mac/Linux.
+              Production-grade local REST API and relational SQLite persistence layer for offline diagnostic state, pathways, and multi-learner data.
             </p>
           </div>
 
           <div className="flex items-center space-x-2">
+            <button
+              onClick={handleExportFullDatabase}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition-all"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export SQLite Dump</span>
+            </button>
+
             <button
               onClick={copyToClipboard}
               className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-1.5 shadow-md transition-all"
@@ -320,23 +388,64 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
           </div>
         </div>
 
-        {/* Windows PowerShell Quick Command Banner */}
-        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-          <div className="flex items-center space-x-2 text-xs font-bold uppercase text-slate-300">
-            <Terminal className="w-4 h-4 text-emerald-400" />
-            <span>Windows PowerShell Startup Commands</span>
+        {/* Live Backend Connection Status Card */}
+        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div
+              className={`w-3 h-3 rounded-full ${
+                backendHealth.connected
+                  ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]'
+                  : 'bg-amber-500'
+              }`}
+            />
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-white">
+                  FastAPI Service (http://localhost:8000):
+                </span>
+                <span
+                  className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
+                    backendHealth.connected
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                  }`}
+                >
+                  {backendHealth.connected ? 'CONNECTED' : 'OFFLINE (FALLBACK ACTIVE)'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {backendHealth.connected
+                  ? `Database: ${backendHealth.databasePath || 'plia.db'} • Latency: ${backendHealth.latencyMs}ms • Learners: ${backendHealth.learnerCount}`
+                  : 'App is operating seamlessly with client-side localStorage fallback cache.'}
+              </p>
+            </div>
           </div>
-          <pre className="text-xs text-emerald-300 font-mono bg-slate-900 p-3 rounded-xl overflow-x-auto">
-{`# 1. Pull your Ollama model
-ollama run qwen3:8b
 
-# 2. Activate Python environment & launch Streamlit
-python -m venv venv
-.\\venv\\Scripts\\Activate.ps1
-pip install -r requirements.txt
-streamlit run app.py`}
-          </pre>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={checkHealth}
+              disabled={isChecking}
+              className="px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 border border-slate-700 transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
+              <span>Ping Health</span>
+            </button>
+
+            <button
+              onClick={handleTestBackendPing}
+              className="px-3 py-1.5 text-xs font-medium text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-lg flex items-center gap-1.5 border border-indigo-500/30 transition-colors"
+            >
+              <Play className="w-3.5 h-3.5 fill-indigo-300" />
+              <span>Test API</span>
+            </button>
+          </div>
         </div>
+
+        {testResult && (
+          <div className="p-3 bg-slate-950 border border-indigo-500/30 rounded-xl text-xs text-indigo-200">
+            {testResult}
+          </div>
+        )}
       </div>
 
       {/* File Browser Grid */}

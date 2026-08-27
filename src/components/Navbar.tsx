@@ -1,20 +1,23 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Brain,
   Database,
-  Cpu,
   Settings,
   BookOpen,
   User,
-  Sparkles,
-  Terminal,
+  Users,
+  Plus,
   Activity,
   Layers,
   Zap,
   RotateCw,
   MessageSquare,
+  Sparkles,
+  Server,
+  ChevronDown,
 } from 'lucide-react';
-import { OllamaConfig } from '../types';
+import { BackendConfig, OllamaConfig } from '../types';
+import { LearnerRegistryItem } from '../lib/storage';
 
 export type AppTab =
   | 'home'
@@ -32,8 +35,13 @@ interface NavbarProps {
   currentTab: AppTab;
   setCurrentTab: (tab: AppTab) => void;
   ollamaConfig: OllamaConfig;
+  backendConfig: BackendConfig;
   activeSubject?: string;
-  learnerName?: string;
+  activeLearner?: LearnerRegistryItem;
+  learners: LearnerRegistryItem[];
+  onSwitchLearner: (learnerId: string) => void;
+  onOpenNewLearner: () => void;
+  onOpenOnboarding: () => void;
   hasActiveDiagnostic: boolean;
   vectorCount: number;
   onToggleAIChat: () => void;
@@ -44,13 +52,20 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   setCurrentTab,
   ollamaConfig,
+  backendConfig,
   activeSubject,
-  learnerName,
+  activeLearner,
+  learners,
+  onSwitchLearner,
+  onOpenNewLearner,
+  onOpenOnboarding,
   hasActiveDiagnostic,
   vectorCount,
   onToggleAIChat,
   isAIChatOpen,
 }) => {
+  const [isLearnerMenuOpen, setIsLearnerMenuOpen] = useState(false);
+
   return (
     <header className="sticky top-0 z-40 bg-[#0F172A]/95 backdrop-blur-md border-b border-slate-800 shadow-xl">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -78,11 +93,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Active Status Badges */}
-          <div className="hidden xl:flex items-center space-x-3">
+          <div className="hidden xl:flex items-center space-x-2.5">
             {/* Ollama Status Pill */}
             <div
               onClick={() => setCurrentTab('settings')}
-              className="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium"
+              className="cursor-pointer flex items-center gap-2 px-3 py-1 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium"
               title="Click to configure Ollama endpoint and model"
             >
               <div
@@ -91,35 +106,47 @@ export const Navbar: React.FC<NavbarProps> = ({
                     ? 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]'
                     : ollamaConfig.isReachable
                     ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
-                    : 'bg-slate-500'
+                    : 'bg-rose-500'
                 }`}
               />
               <span className="text-slate-300">
                 {ollamaConfig.mockMode
-                  ? 'Mock Local Engine'
+                  ? 'Mock Engine'
                   : ollamaConfig.isReachable
                   ? `Ollama: ${ollamaConfig.selectedModel}`
                   : 'Ollama: Offline'}
               </span>
             </div>
 
+            {/* Local DB Status Pill */}
+            <div
+              onClick={() => setCurrentTab('pythonBundle')}
+              className="cursor-pointer flex items-center gap-1.5 px-3 py-1 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium text-slate-300"
+              title="Local SQLite & FastAPI status"
+            >
+              <Server className={`w-3 h-3 ${backendConfig.isConnected ? 'text-emerald-400' : 'text-slate-500'}`} />
+              <span>{backendConfig.isConnected ? 'Local DB: Connected' : 'Local DB: Offline'}</span>
+            </div>
+
             {/* Vector Database Pill */}
             <div
               onClick={() => setCurrentTab('vectorDb')}
-              className="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium text-slate-300"
-              title="Click to explore Local Vector Database & RAG index"
+              className="cursor-pointer flex items-center gap-1.5 px-3 py-1 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium text-slate-300"
+              title="Local Vector Database & RAG index"
             >
-              <div className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
-              <span>Vector DB: {vectorCount} Chunks</span>
+              <Database className="w-3 h-3 text-indigo-400" />
+              <span>Vectors: {vectorCount}</span>
             </div>
 
-            {/* Current Subject Badge */}
-            {activeSubject && (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/90 rounded-full border border-slate-800 text-xs font-medium text-slate-200">
-                <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{activeSubject}</span>
-              </div>
-            )}
+            {/* Quick Setup Modal Button */}
+            <button
+              onClick={onOpenOnboarding}
+              className="flex items-center gap-1 px-2.5 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 rounded-full text-xs font-medium text-indigo-300 transition-colors"
+              title="Open Guided Setup Wizard"
+            >
+              <Sparkles className="w-3 h-3 text-indigo-400" />
+              <span>Setup</span>
+            </button>
           </div>
 
           {/* Navigation Links */}
@@ -187,7 +214,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               id="nav-btn-flashcards"
               onClick={() => setCurrentTab('flashcards')}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hidden sm:flex items-center space-x-1 ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hidden md:flex items-center space-x-1 ${
                 currentTab === 'flashcards'
                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
@@ -234,14 +261,66 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Settings className="w-4 h-4" />
             </button>
 
-            {learnerName && (
-              <div
-                className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 hidden lg:flex items-center justify-center text-xs font-bold text-indigo-300"
-                title={`Learner: ${learnerName}`}
+            {/* Multi-Learner Switcher Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setIsLearnerMenuOpen(!isLearnerMenuOpen)}
+                className="flex items-center space-x-1.5 pl-2 pr-2.5 py-1 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 rounded-full text-xs font-medium text-slate-200 transition-colors"
+                title="Switch Active Learner"
               >
-                {learnerName.slice(0, 2).toUpperCase()}
-              </div>
-            )}
+                <div className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold text-white">
+                  {(activeLearner?.name || 'L').slice(0, 1).toUpperCase()}
+                </div>
+                <span className="hidden sm:inline max-w-[90px] truncate">{activeLearner?.name || 'Learner'}</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {isLearnerMenuOpen && (
+                <div className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-2 z-50 text-xs">
+                  <div className="px-2 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1 flex items-center justify-between">
+                    <span>Learners</span>
+                    <span className="text-[10px] text-indigo-400">{learners.length} active</span>
+                  </div>
+
+                  <div className="max-h-48 overflow-y-auto space-y-1">
+                    {learners.map(l => (
+                      <button
+                        key={l.learnerId}
+                        onClick={() => {
+                          onSwitchLearner(l.learnerId);
+                          setIsLearnerMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
+                          l.learnerId === activeLearner?.learnerId
+                            ? 'bg-indigo-600 text-white font-medium'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="truncate">
+                          <p className="truncate font-medium">{l.name}</p>
+                          <p className={`text-[10px] ${l.learnerId === activeLearner?.learnerId ? 'text-indigo-200' : 'text-slate-400'}`}>
+                            {l.subject}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-slate-800 mt-1 pt-1">
+                    <button
+                      onClick={() => {
+                        setIsLearnerMenuOpen(false);
+                        onOpenNewLearner();
+                      }}
+                      className="w-full px-2.5 py-1.5 rounded-lg text-left text-indigo-300 hover:bg-indigo-500/10 flex items-center gap-1.5 font-medium transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add New Learner</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </nav>
         </div>
       </div>

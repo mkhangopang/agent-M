@@ -21,6 +21,7 @@ import {
   DiagnosticState,
 } from '../types';
 import { vectorDb } from '../lib/vectorDb';
+import { ollamaService } from '../lib/ollamaClient';
 
 interface DiagnosticViewProps {
   diagnosticState: DiagnosticState;
@@ -114,7 +115,7 @@ Return valid JSON only matching:
           partialUnderstanding: 'Suggests ad-hoc restarts without isolating the root cause',
           thoroughUnderstanding: 'Applies rigorous first-principles analysis and proposes bounded, idempotent mitigation',
         },
-        estimatedTimeSeconds: 90,
+        expectedEvidence: 'Identification of state invariant divergence, isolation strategy, and idempotent mitigation.',
       };
 
       const res = await ollamaService.generateStructured<DiagnosticQuestion>(

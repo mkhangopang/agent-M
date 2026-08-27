@@ -1,256 +1,528 @@
 /**
- * Local Persistence Layer for PLIA
- * Saves all learner records, diagnostic sessions, pathways, and spaced reviews locally in localStorage/IndexedDB.
- * Provides export/import functions for JSON profiles and local database backups.
+ * Local-First Storage & Multi-Learner State Manager for PLIA
+ * Supports SQLite backend synchronization via `localBackendService` with
+ * 100% resilient client-side offline caching.
  */
 
-import { DiagnosticState, LearnerProfile, LearningPathway, PathwaySnapshot, SpacedReviewItem } from '../types';
+import {
+  AIChatMessage,
+  DiagnosticState,
+  LearnerProfile,
+  LearningPathway,
+  PathwaySnapshot,
+  SpacedReviewItem,
+} from '../types';
+import { localBackendService } from './backendClient';
 
-const LEARNERS_KEY = 'plia_learners_v1';
-const CURRENT_LEARNER_KEY = 'plia_current_learner_id_v1';
-const ACTIVE_DIAGNOSTIC_KEY = 'plia_active_diagnostic_v1';
-const PATHWAYS_KEY = 'plia_pathways_v1';
-const SPACED_REVIEWS_KEY = 'plia_spaced_reviews_v1';
-const SNAPSHOTS_KEY = 'plia_snapshots_v1';
+const ACTIVE_LEARNER_KEY = 'plia_active_learner_id_v2';
+const LEARNERS_REGISTRY_KEY = 'plia_learners_registry_v2';
+const DEFAULT_LEARNER_ID = 'learner-default-01';
+
+export interface LearnerRegistryItem {
+  learnerId: string;
+  name: string;
+  subject: string;
+  goal: string;
+  experienceLevel: 'beginner' | 'intermediate' | 'advanced' | 'unspecified';
+  availableLearningTime: string;
+  createdAt: string;
+  lastActiveAt: string;
+}
 
 export class LocalStorageManager {
-  // --- Learners ---
-  public static getAllLearners(): LearnerProfile[] {
+  private activeLearnerId: string = DEFAULT_LEARNER_ID;
+
+  constructor() {
+    this.initActiveLearner();
+  }
+
+  private initActiveLearner(): void {
     try {
-      const data = localStorage.getItem(LEARNERS_KEY);
-      return data ? JSON.parse(data) : [];
+      const storedId = localStorage.getItem(ACTIVE_LEARNER_KEY);
+      if (storedId) {
+        this.activeLearnerId = storedId;
+      } else {
+        this.activeLearnerId = DEFAULT_LEARNER_ID;
+        localStorage.setItem(ACTIVE_LEARNER_KEY, DEFAULT_LEARNER_ID);
+        this.registerLearner({
+          learnerId: DEFAULT_LEARNER_ID,
+          name: 'Primary Learner',
+          subject: 'Computer Science',
+          goal: 'Master Distributed Systems & System Architecture',
+          experienceLevel: 'intermediate',
+          availableLearningTime: '30 mins / day',
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+        });
+      }
     } catch {
-      return [];
+      this.activeLearnerId = DEFAULT_LEARNER_ID;
     }
   }
 
-  public static getLearnerById(id: string): LearnerProfile | undefined {
-    const learners = this.getAllLearners();
-    return learners.find(l => l.learnerId === id);
+  // --- Multi-Learner Management ---
+  public getActiveLearnerId(): string {
+    return this.activeLearnerId;
   }
 
-  public static saveLearner(profile: LearnerProfile): void {
-    const learners = this.getAllLearners();
-    const index = learners.findIndex(l => l.learnerId === profile.learnerId);
-    if (index >= 0) {
-      learners[index] = { ...profile, updatedAt: new Date().toISOString() };
-    } else {
-      learners.push(profile);
-    }
-    localStorage.setItem(LEARNERS_KEY, JSON.stringify(learners));
-    this.setCurrentLearnerId(profile.learnerId);
-  }
-
-  public static getCurrentLearnerId(): string | null {
-    return localStorage.getItem(CURRENT_LEARNER_KEY);
-  }
-
-  public static setCurrentLearnerId(id: string): void {
-    localStorage.setItem(CURRENT_LEARNER_KEY, id);
-  }
-
-  public static getCurrentLearner(): LearnerProfile | null {
-    const id = this.getCurrentLearnerId();
-    if (!id) return null;
-    return this.getLearnerById(id) || null;
-  }
-
-  public static deleteLearner(id: string): void {
-    const learners = this.getAllLearners().filter(l => l.learnerId !== id);
-    localStorage.setItem(LEARNERS_KEY, JSON.stringify(learners));
-    if (this.getCurrentLearnerId() === id) {
-      localStorage.removeItem(CURRENT_LEARNER_KEY);
-    }
-  }
-
-  // --- Active Diagnostic State ---
-  public static getActiveDiagnostic(): DiagnosticState | null {
+  public setActiveLearnerId(learnerId: string): void {
+    this.activeLearnerId = learnerId;
     try {
-      const data = localStorage.getItem(ACTIVE_DIAGNOSTIC_KEY);
-      return data ? JSON.parse(data) : null;
+      localStorage.setItem(ACTIVE_LEARNER_KEY, learnerId);
+      this.touchLearnerActivity(learnerId);
+    } catch {
+      // ignore
+    }
+  }
+
+  public getLearners(): LearnerRegistryItem[] {
+    try {
+      const raw = localStorage.getItem(LEARNERS_REGISTRY_KEY);
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch {
+      // fallback
+    }
+    return [
+      {
+        learnerId: DEFAULT_LEARNER_ID,
+        name: 'Primary Learner',
+        subject: 'Computer Science',
+        goal: 'Master Distributed Systems & Architecture',
+        experienceLevel: 'intermediate',
+        availableLearningTime: '30 mins / day',
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      },
+    ];
+  }
+
+  public registerLearner(item: LearnerRegistryItem): void {
+    const list = this.getLearners();
+    const existingIndex = list.findIndex(l => l.learnerId === item.learnerId);
+    if (existingIndex >= 0) {
+      list[existingIndex] = { ...list[existingIndex], ...item, lastActiveAt: new Date().toISOString() };
+    } else {
+      list.push(item);
+    }
+    try {
+      localStorage.setItem(LEARNERS_REGISTRY_KEY, JSON.stringify(list));
+      // Sync with local backend
+      localBackendService.saveLearner({
+        learner_id: item.learnerId,
+        name: item.name,
+        subject: item.subject,
+        goal: item.goal,
+        experience_level: item.experienceLevel,
+        available_learning_time: item.availableLearningTime,
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  public deleteLearner(learnerId: string): void {
+    const list = this.getLearners().filter(l => l.learnerId !== learnerId);
+    try {
+      localStorage.setItem(LEARNERS_REGISTRY_KEY, JSON.stringify(list));
+      localStorage.removeItem(`plia_profile_${learnerId}`);
+      localStorage.removeItem(`plia_pathway_${learnerId}`);
+      localStorage.removeItem(`plia_diagnostic_state_${learnerId}`);
+      localStorage.removeItem(`plia_snapshots_${learnerId}`);
+      localStorage.removeItem(`plia_reviews_${learnerId}`);
+      localStorage.removeItem(`plia_chat_${learnerId}`);
+
+      localBackendService.deleteLearner(learnerId);
+
+      if (this.activeLearnerId === learnerId) {
+        const next = list[0]?.learnerId || DEFAULT_LEARNER_ID;
+        this.setActiveLearnerId(next);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private touchLearnerActivity(learnerId: string): void {
+    const list = this.getLearners();
+    const item = list.find(l => l.learnerId === learnerId);
+    if (item) {
+      item.lastActiveAt = new Date().toISOString();
+      try {
+        localStorage.setItem(LEARNERS_REGISTRY_KEY, JSON.stringify(list));
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // --- Scoped Learner Profile ---
+  public saveLearnerProfile(profile: LearnerProfile): void {
+    const key = `plia_profile_${profile.learnerId || this.activeLearnerId}`;
+    try {
+      localStorage.setItem(key, JSON.stringify(profile));
+      this.touchLearnerActivity(profile.learnerId || this.activeLearnerId);
+      // Sync to SQLite backend
+      localBackendService.saveProfile(profile.learnerId || this.activeLearnerId, profile);
+    } catch (e) {
+      console.warn('Failed to save learner profile:', e);
+    }
+  }
+
+  public getLearnerProfile(learnerId?: string): LearnerProfile | null {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_profile_${targetId}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
     } catch {
       return null;
     }
+    return null;
   }
 
-  public static saveActiveDiagnostic(state: DiagnosticState): void {
-    localStorage.setItem(ACTIVE_DIAGNOSTIC_KEY, JSON.stringify(state));
-  }
-
-  public static clearActiveDiagnostic(): void {
-    localStorage.removeItem(ACTIVE_DIAGNOSTIC_KEY);
-  }
-
-  // --- Learning Pathways ---
-  public static getAllPathways(): Record<string, LearningPathway> {
+  // --- Scoped Learning Pathway ---
+  public saveLearningPathway(pathway: LearningPathway): void {
+    const key = `plia_pathway_${pathway.learnerId || this.activeLearnerId}`;
     try {
-      const data = localStorage.getItem(PATHWAYS_KEY);
-      return data ? JSON.parse(data) : {};
-    } catch {
-      return {};
+      localStorage.setItem(key, JSON.stringify(pathway));
+      localBackendService.savePathway(pathway.learnerId || this.activeLearnerId, pathway);
+    } catch (e) {
+      console.warn('Failed to save learning pathway:', e);
     }
   }
 
-  public static getPathwayForLearner(learnerId: string): LearningPathway | null {
-    const pathways = this.getAllPathways();
-    return pathways[learnerId] || null;
-  }
-
-  public static savePathway(pathway: LearningPathway): void {
-    const pathways = this.getAllPathways();
-    pathways[pathway.learnerId] = { ...pathway, updatedAt: new Date().toISOString() };
-    localStorage.setItem(PATHWAYS_KEY, JSON.stringify(pathways));
-  }
-
-  // --- Spaced Reviews ---
-  public static getSpacedReviews(learnerId: string): SpacedReviewItem[] {
+  public getLearningPathway(learnerId?: string): LearningPathway | null {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_pathway_${targetId}`;
     try {
-      const data = localStorage.getItem(`${SPACED_REVIEWS_KEY}_${learnerId}`);
-      return data ? JSON.parse(data) : [];
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  // --- Scoped Diagnostic State ---
+  public saveDiagnosticState(state: DiagnosticState): void {
+    const key = `plia_diagnostic_state_${state.learnerId || this.activeLearnerId}`;
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+      localBackendService.saveDiagnosticState(state.learnerId || this.activeLearnerId, state);
+    } catch (e) {
+      console.warn('Failed to save diagnostic state:', e);
+    }
+  }
+
+  public getDiagnosticState(learnerId?: string): DiagnosticState | null {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_diagnostic_state_${targetId}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  public clearDiagnosticState(learnerId?: string): void {
+    const targetId = learnerId || this.activeLearnerId;
+    try {
+      localStorage.removeItem(`plia_diagnostic_state_${targetId}`);
+    } catch {
+      // ignore
+    }
+  }
+
+  // --- Scoped Snapshots ---
+  public saveSnapshot(snapshot: PathwaySnapshot): void {
+    const targetId = snapshot.learnerId || this.activeLearnerId;
+    const key = `plia_snapshots_${targetId}`;
+    try {
+      const existing = this.getSnapshots(targetId);
+      const updated = [snapshot, ...existing.filter(s => s.id !== snapshot.id)];
+      localStorage.setItem(key, JSON.stringify(updated));
+      localBackendService.saveSnapshot(targetId, snapshot);
+    } catch (e) {
+      console.warn('Failed to save snapshot:', e);
+    }
+  }
+
+  public getSnapshots(learnerId?: string): PathwaySnapshot[] {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_snapshots_${targetId}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
     } catch {
       return [];
     }
+    return [];
   }
 
-  public static saveSpacedReviews(learnerId: string, items: SpacedReviewItem[]): void {
-    localStorage.setItem(`${SPACED_REVIEWS_KEY}_${learnerId}`, JSON.stringify(items));
+  public deleteSnapshot(snapshotId: string, learnerId?: string): void {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_snapshots_${targetId}`;
+    try {
+      const existing = this.getSnapshots(targetId);
+      const updated = existing.filter(s => s.id !== snapshotId);
+      localStorage.setItem(key, JSON.stringify(updated));
+      localBackendService.deleteSnapshot(snapshotId);
+    } catch {
+      // ignore
+    }
   }
 
-  public static scheduleSpacedReview(learnerId: string, concept: string, domain: string): void {
-    const reviews = this.getSpacedReviews(learnerId);
-    const now = new Date();
-    const nextDate = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000); // 1 day interval
+  // --- Scoped Spaced Review Items ---
+  public getSpacedReviews(learnerId?: string): SpacedReviewItem[] {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_reviews_${targetId}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+    return [];
+  }
 
-    const existingIdx = reviews.findIndex(r => r.concept === concept);
-    if (existingIdx >= 0) {
-      const current = reviews[existingIdx];
-      const intervals = [1, 3, 7, 14, 30];
-      const nextInterval = intervals[Math.min(intervals.length - 1, current.repetitionCount + 1)] || 30;
-      reviews[existingIdx] = {
-        ...current,
-        repetitionCount: current.repetitionCount + 1,
-        intervalDays: nextInterval,
-        lastMasteredDate: now.toISOString(),
-        nextReviewDate: new Date(now.getTime() + nextInterval * 24 * 60 * 60 * 1000).toISOString(),
-        status: 'upcoming',
-      };
-    } else {
-      reviews.push({
-        id: `review-${Date.now()}`,
+  public saveSpacedReviews(reviews: SpacedReviewItem[], learnerId?: string): void {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_reviews_${targetId}`;
+    try {
+      localStorage.setItem(key, JSON.stringify(reviews));
+    } catch {
+      // ignore
+    }
+  }
+
+  // --- Scoped Chat History ---
+  public getChatHistory(learnerId?: string): AIChatMessage[] {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_chat_${targetId}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+    return [];
+  }
+
+  public saveChatHistory(messages: AIChatMessage[], learnerId?: string): void {
+    const targetId = learnerId || this.activeLearnerId;
+    const key = `plia_chat_${targetId}`;
+    try {
+      // Keep last 100 messages max
+      const trimmed = messages.slice(-100);
+      localStorage.setItem(key, JSON.stringify(trimmed));
+    } catch {
+      // ignore
+    }
+  }
+
+  // --- Full Export / Import Utility ---
+  public exportData(): string {
+    const data: Record<string, unknown> = {
+      version: '2.0.0',
+      exportedAt: new Date().toISOString(),
+      activeLearnerId: this.activeLearnerId,
+      learners: this.getLearners(),
+      profiles: {} as Record<string, unknown>,
+      pathways: {} as Record<string, unknown>,
+      snapshots: {} as Record<string, unknown>,
+      diagnosticStates: {} as Record<string, unknown>,
+    };
+
+    const learners = this.getLearners();
+    for (const l of learners) {
+      const p = this.getLearnerProfile(l.learnerId);
+      if (p) (data.profiles as Record<string, unknown>)[l.learnerId] = p;
+
+      const pw = this.getLearningPathway(l.learnerId);
+      if (pw) (data.pathways as Record<string, unknown>)[l.learnerId] = pw;
+
+      const sn = this.getSnapshots(l.learnerId);
+      if (sn.length > 0) (data.snapshots as Record<string, unknown>)[l.learnerId] = sn;
+
+      const ds = this.getDiagnosticState(l.learnerId);
+      if (ds) (data.diagnosticStates as Record<string, unknown>)[l.learnerId] = ds;
+    }
+
+    return JSON.stringify(data, null, 2);
+  }
+
+  public importData(jsonString: string): { success: boolean; error?: string } {
+    try {
+      const parsed = JSON.parse(jsonString);
+      if (!parsed || typeof parsed !== 'object') {
+        return { success: false, error: 'Invalid JSON structure' };
+      }
+
+      if (Array.isArray(parsed.learners)) {
+        localStorage.setItem(LEARNERS_REGISTRY_KEY, JSON.stringify(parsed.learners));
+      }
+
+      if (parsed.profiles) {
+        for (const [id, prof] of Object.entries(parsed.profiles)) {
+          localStorage.setItem(`plia_profile_${id}`, JSON.stringify(prof));
+        }
+      }
+
+      if (parsed.pathways) {
+        for (const [id, pw] of Object.entries(parsed.pathways)) {
+          localStorage.setItem(`plia_pathway_${id}`, JSON.stringify(pw));
+        }
+      }
+
+      if (parsed.snapshots) {
+        for (const [id, sn] of Object.entries(parsed.snapshots)) {
+          localStorage.setItem(`plia_snapshots_${id}`, JSON.stringify(sn));
+        }
+      }
+
+      if (parsed.activeLearnerId) {
+        this.setActiveLearnerId(parsed.activeLearnerId);
+      }
+
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: msg };
+    }
+  }
+
+  // --- Static Convenience Delegates ---
+  public static getCurrentLearnerId(): string {
+    return storageManager.getActiveLearnerId();
+  }
+
+  public static setCurrentLearnerId(id: string): void {
+    storageManager.setActiveLearnerId(id);
+  }
+
+  public static getCurrentLearner(): LearnerProfile | null {
+    return storageManager.getLearnerProfile();
+  }
+
+  public static getAllLearners(): LearnerProfile[] {
+    const list = storageManager.getLearners();
+    return list.map(l => storageManager.getLearnerProfile(l.learnerId)).filter((p): p is LearnerProfile => p !== null);
+  }
+
+  public static saveLearner(profile: LearnerProfile): void {
+    storageManager.saveLearnerProfile(profile);
+  }
+
+  public static deleteLearner(id: string): void {
+    storageManager.deleteLearner(id);
+  }
+
+  public static getPathwayForLearner(learnerId: string): LearningPathway | null {
+    return storageManager.getLearningPathway(learnerId);
+  }
+
+  public static savePathway(pathway: LearningPathway): void {
+    storageManager.saveLearningPathway(pathway);
+  }
+
+  public static getActiveDiagnostic(): DiagnosticState | null {
+    return storageManager.getDiagnosticState();
+  }
+
+  public static saveActiveDiagnostic(state: DiagnosticState): void {
+    storageManager.saveDiagnosticState(state);
+  }
+
+  public static clearActiveDiagnostic(): void {
+    storageManager.clearDiagnosticState();
+  }
+
+  public static getAllSnapshots(learnerId?: string): PathwaySnapshot[] {
+    return storageManager.getSnapshots(learnerId);
+  }
+
+  public static saveSnapshot(snapshot: PathwaySnapshot): void {
+    storageManager.saveSnapshot(snapshot);
+  }
+
+  public static deleteSnapshot(id: string, learnerId?: string): void {
+    storageManager.deleteSnapshot(id, learnerId);
+  }
+
+  public static getSpacedReviews(learnerId?: string): SpacedReviewItem[] {
+    return storageManager.getSpacedReviews(learnerId);
+  }
+
+  public static saveSpacedReviews(reviews: SpacedReviewItem[], learnerId?: string): void {
+    storageManager.saveSpacedReviews(reviews, learnerId);
+  }
+
+  public static scheduleSpacedReview(
+    itemOrLearnerId: SpacedReviewItem | string,
+    conceptOrLearnerId?: string,
+    domain?: string
+  ): void {
+    if (typeof itemOrLearnerId === 'string' && conceptOrLearnerId && domain) {
+      const learnerId = itemOrLearnerId;
+      const concept = conceptOrLearnerId;
+      const reviews = storageManager.getSpacedReviews(learnerId);
+      const existingIdx = reviews.findIndex(r => r.concept === concept && r.domain === domain);
+      const now = new Date();
+      const nextReview = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      const newItem: SpacedReviewItem = {
+        id: `sr-${Date.now()}`,
         concept,
         domain,
         lastMasteredDate: now.toISOString(),
         intervalDays: 1,
-        nextReviewDate: nextDate.toISOString(),
-        repetitionCount: 0,
+        nextReviewDate: nextReview,
+        repetitionCount: 1,
         status: 'upcoming',
-      });
-    }
-
-    this.saveSpacedReviews(learnerId, reviews);
-  }
-
-  // --- Pathway & Mastery Snapshots ---
-  public static getAllSnapshots(learnerId?: string): PathwaySnapshot[] {
-    try {
-      const data = localStorage.getItem(SNAPSHOTS_KEY);
-      const list: PathwaySnapshot[] = data ? JSON.parse(data) : [];
-      if (learnerId) {
-        return list.filter(s => s.learnerId === learnerId);
-      }
-      return list;
-    } catch {
-      return [];
-    }
-  }
-
-  public static saveSnapshot(snapshot: PathwaySnapshot): void {
-    const list = this.getAllSnapshots();
-    const existingIdx = list.findIndex(s => s.id === snapshot.id);
-    if (existingIdx >= 0) {
-      list[existingIdx] = snapshot;
-    } else {
-      list.unshift(snapshot); // most recent first
-    }
-    localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(list));
-  }
-
-  public static deleteSnapshot(snapshotId: string): void {
-    const list = this.getAllSnapshots().filter(s => s.id !== snapshotId);
-    localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(list));
-  }
-
-  public static getSnapshotById(snapshotId: string): PathwaySnapshot | undefined {
-    return this.getAllSnapshots().find(s => s.id === snapshotId);
-  }
-
-  // --- Export & Import ---
-  public static exportFullData(): string {
-    const exportObject = {
-      version: '1.0.0',
-      exportedAt: new Date().toISOString(),
-      learners: this.getAllLearners(),
-      pathways: this.getAllPathways(),
-      snapshots: this.getAllSnapshots(),
-      currentLearnerId: this.getCurrentLearnerId(),
-    };
-    return JSON.stringify(exportObject, null, 2);
-  }
-
-  public static importData(jsonString: string): { success: boolean; message: string; importedCount?: number } {
-    try {
-      const parsed = JSON.parse(jsonString);
-      if (!parsed.learners || !Array.isArray(parsed.learners)) {
-        return { success: false, message: 'Invalid profile format: Missing learners array.' };
-      }
-
-      const existingLearners = this.getAllLearners();
-      for (const learner of parsed.learners) {
-        if (!learner.learnerId || !learner.subject) {
-          continue;
-        }
-        const existingIdx = existingLearners.findIndex(l => l.learnerId === learner.learnerId);
-        if (existingIdx >= 0) {
-          existingLearners[existingIdx] = learner;
-        } else {
-          existingLearners.push(learner);
-        }
-      }
-
-      localStorage.setItem(LEARNERS_KEY, JSON.stringify(existingLearners));
-
-      if (parsed.pathways && typeof parsed.pathways === 'object') {
-        const existingPathways = this.getAllPathways();
-        const merged = { ...existingPathways, ...parsed.pathways };
-        localStorage.setItem(PATHWAYS_KEY, JSON.stringify(merged));
-      }
-
-      if (parsed.snapshots && Array.isArray(parsed.snapshots)) {
-        const existingSnapshots = this.getAllSnapshots();
-        for (const snap of parsed.snapshots) {
-          if (!existingSnapshots.some(s => s.id === snap.id)) {
-            existingSnapshots.push(snap);
-          }
-        }
-        localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(existingSnapshots));
-      }
-
-      return {
-        success: true,
-        message: `Successfully imported ${parsed.learners.length} learner profile(s).`,
-        importedCount: parsed.learners.length,
       };
-    } catch (e: unknown) {
-      const err = e instanceof Error ? e.message : String(e);
-      return { success: false, message: `JSON parsing error: ${err}` };
+      if (existingIdx >= 0) {
+        reviews[existingIdx] = {
+          ...reviews[existingIdx],
+          lastMasteredDate: now.toISOString(),
+          intervalDays: Math.min(30, (reviews[existingIdx].intervalDays || 1) * 2),
+          repetitionCount: (reviews[existingIdx].repetitionCount || 1) + 1,
+        };
+      } else {
+        reviews.push(newItem);
+      }
+      storageManager.saveSpacedReviews(reviews, learnerId);
+    } else if (typeof itemOrLearnerId === 'object') {
+      const item = itemOrLearnerId;
+      const learnerId = conceptOrLearnerId;
+      const reviews = storageManager.getSpacedReviews(learnerId);
+      const existingIdx = reviews.findIndex(r => r.id === item.id || (r.concept === item.concept && r.domain === item.domain));
+      if (existingIdx >= 0) {
+        reviews[existingIdx] = item;
+      } else {
+        reviews.push(item);
+      }
+      storageManager.saveSpacedReviews(reviews, learnerId);
     }
   }
 
   public static clearAllData(): void {
-    localStorage.removeItem(LEARNERS_KEY);
-    localStorage.removeItem(CURRENT_LEARNER_KEY);
-    localStorage.removeItem(ACTIVE_DIAGNOSTIC_KEY);
-    localStorage.removeItem(PATHWAYS_KEY);
-    localStorage.removeItem(SNAPSHOTS_KEY);
+    try {
+      localStorage.clear();
+    } catch {
+      // ignore
+    }
+  }
+
+  public static exportData(): string {
+    return storageManager.exportData();
+  }
+
+  public static importData(jsonString: string): { success: boolean; error?: string } {
+    return storageManager.importData(jsonString);
   }
 }
+
+export const storageManager = new LocalStorageManager();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Navbar, AppTab } from './components/Navbar';
 import { HomeView } from './components/HomeView';
 import { DiagnosticView } from './components/DiagnosticView';
@@ -11,8 +11,10 @@ import { VectorDbExplorer } from './components/VectorDbExplorer';
 import { ProfileView } from './components/ProfileView';
 import { SettingsView } from './components/SettingsView';
 import { PythonBundleView } from './components/PythonBundleView';
+import { OnboardingModal } from './components/OnboardingModal';
 
 import {
+  BackendConfig,
   DiagnosticAnswerEvaluation,
   DiagnosticQuestion,
   DiagnosticState,
@@ -20,9 +22,10 @@ import {
   LearningPathway,
   OllamaConfig,
 } from './types';
-import { LocalStorageManager } from './lib/storage';
+import { storageManager, LearnerRegistryItem } from './lib/storage';
 import { vectorDb } from './lib/vectorDb';
 import { ollamaService } from './lib/ollamaClient';
+import { localBackendService } from './lib/backendClient';
 import { getCurriculumForSubject } from './lib/defaultCurricula';
 import {
   compileLearnerProfile,
@@ -32,27 +35,28 @@ import {
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<AppTab>('home');
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
+
+  // Multi-Learner State
+  const [learners, setLearners] = useState<LearnerRegistryItem[]>(() => storageManager.getLearners());
+  const [activeLearnerId, setActiveLearnerId] = useState<string>(() => storageManager.getActiveLearnerId());
 
   const [currentLearner, setCurrentLearner] = useState<LearnerProfile | null>(() => {
-    return LocalStorageManager.getCurrentLearner();
+    return storageManager.getLearnerProfile(storageManager.getActiveLearnerId());
   });
 
   const [activeDiagnostic, setActiveDiagnostic] = useState<DiagnosticState | null>(() => {
-    return LocalStorageManager.getActiveDiagnostic();
+    return storageManager.getDiagnosticState(storageManager.getActiveLearnerId());
   });
 
   const [currentPathway, setCurrentPathway] = useState<LearningPathway | null>(() => {
-    const learner = LocalStorageManager.getCurrentLearner();
-    return learner ? LocalStorageManager.getPathwayForLearner(learner.learnerId) : null;
+    return storageManager.getLearningPathway(storageManager.getActiveLearnerId());
   });
 
-  const [ollamaConfig, setOllamaConfig] = useState<OllamaConfig>(() => {
-    return ollamaService.getConfig();
-  });
-
-  const [vectorCount, setVectorCount] = useState<number>(() => {
-    return vectorDb.getAll().length;
-  });
+  // Services Config & Health State
+  const [ollamaConfig, setOllamaConfig] = useState<OllamaConfig>(() => ollamaService.getConfig());
+  const [backendConfig, setBackendConfig] = useState<BackendConfig>(() => localBackendService.getConfig());
+  const [vectorCount, setVectorCount] = useState<number>(() => vectorDb.getAll().length);
 
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [lastEvaluation, setLastEvaluation] = useState<DiagnosticAnswerEvaluation | null>(null);
@@ -61,25 +65,51 @@ export default function App() {
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
   const [chatConceptContext, setChatConceptContext] = useState<string | undefined>(undefined);
 
-  // Background health check for Ollama at startup
-  useEffect(() => {
-    ollamaService.checkHealth().then(res => {
-      if (res.reachable) {
-        setOllamaConfig(ollamaService.getConfig());
-      }
-    });
+  const refreshOllama = useCallback(async () => {
+    const res = await ollamaService.checkHealth();
+    setOllamaConfig(ollamaService.getConfig());
+    if (res.reachable && res.hasEmbeddingModel) {
+      // Upgrade any un-embedded vectors in background
+      vectorDb.upgradeEmbeddingsWithOllama(txt => ollamaService.embed(txt));
+    }
   }, []);
+
+  const refreshBackend = useCallback(async () => {
+    await localBackendService.checkHealth();
+    setBackendConfig(localBackendService.getConfig());
+  }, []);
+
+  // Background health checks at startup
+  useEffect(() => {
+    refreshOllama();
+    refreshBackend();
+  }, [refreshOllama, refreshBackend]);
+
+  // Handle Switching Learner
+  const handleSwitchLearner = (newLearnerId: string) => {
+    storageManager.setActiveLearnerId(newLearnerId);
+    setActiveLearnerId(newLearnerId);
+    setLearners(storageManager.getLearners());
+
+    const prof = storageManager.getLearnerProfile(newLearnerId);
+    const path = storageManager.getLearningPathway(newLearnerId);
+    const diag = storageManager.getDiagnosticState(newLearnerId);
+
+    setCurrentLearner(prof);
+    setCurrentPathway(path);
+    setActiveDiagnostic(diag);
+  };
 
   const handleOpenAIChatWithContext = (concept?: string) => {
     setChatConceptContext(concept);
     setIsAIChatOpen(true);
   };
 
-  // Update learner profile whenever current learner changes
+  // Update learner profile
   const handleSelectProfile = (profile: LearnerProfile) => {
     setCurrentLearner(profile);
-    LocalStorageManager.setCurrentLearnerId(profile.learnerId);
-    const path = LocalStorageManager.getPathwayForLearner(profile.learnerId);
+    storageManager.saveLearnerProfile(profile);
+    const path = storageManager.getLearningPathway(profile.learnerId);
     if (path) {
       setCurrentPathway(path);
     }
@@ -103,7 +133,7 @@ export default function App() {
       ...curriculum.metacognitiveQuestions,
     ].map((q, idx) => ({ ...q, questionNumber: idx + 1 }));
 
-    const learnerId = currentLearner?.learnerId || `learner-${Date.now()}`;
+    const learnerId = activeLearnerId || `learner-${Date.now()}`;
     const newState: DiagnosticState = {
       sessionId: `session-${Date.now()}`,
       learnerId,
@@ -120,7 +150,7 @@ export default function App() {
     };
 
     setActiveDiagnostic(newState);
-    LocalStorageManager.saveActiveDiagnostic(newState);
+    storageManager.saveDiagnosticState(newState);
     setLastEvaluation(null);
     setCurrentTab('diagnostic');
   };
@@ -136,7 +166,7 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
     setActiveDiagnostic(updatedState);
-    LocalStorageManager.saveActiveDiagnostic(updatedState);
+    storageManager.saveDiagnosticState(updatedState);
     setLastEvaluation(null);
   };
 
@@ -183,7 +213,7 @@ export default function App() {
       };
 
       setActiveDiagnostic(updatedState);
-      LocalStorageManager.saveActiveDiagnostic(updatedState);
+      storageManager.saveDiagnosticState(updatedState);
       setLastEvaluation(evaluation);
 
       return evaluation;
@@ -199,9 +229,9 @@ export default function App() {
     const nextIndex = activeDiagnostic.currentQuestionIndex + 1;
     let nextPhase = activeDiagnostic.currentPhase;
 
-    if (nextIndex >= 10) nextPhase = 'PHASE_D_METACOGNITIVE';
-    else if (nextIndex >= 6) nextPhase = 'PHASE_C_COGNITIVE_PROBE';
-    else if (nextIndex >= 3) nextPhase = 'PHASE_B_BASELINE_MASTERY';
+    if (nextIndex >= 10) nextPhase = 'PHASE_D_METACOGNITION';
+    else if (nextIndex >= 6) nextPhase = 'PHASE_C_COGNITIVE';
+    else if (nextIndex >= 3) nextPhase = 'PHASE_B_BASELINE';
 
     const updatedState: DiagnosticState = {
       ...activeDiagnostic,
@@ -211,7 +241,7 @@ export default function App() {
     };
 
     setActiveDiagnostic(updatedState);
-    LocalStorageManager.saveActiveDiagnostic(updatedState);
+    storageManager.saveDiagnosticState(updatedState);
     setLastEvaluation(null);
   };
 
@@ -225,15 +255,17 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
     setActiveDiagnostic(completedState);
-    LocalStorageManager.saveActiveDiagnostic(completedState);
+    storageManager.saveDiagnosticState(completedState);
+
+    const activeRegistryLearner = learners.find(l => l.learnerId === activeDiagnostic.learnerId);
 
     const profile = compileLearnerProfile(
       activeDiagnostic.learnerId,
-      currentLearner?.name,
+      currentLearner?.name || activeRegistryLearner?.name || 'Learner',
       activeDiagnostic.subject,
-      currentLearner?.goal || '',
-      currentLearner?.experienceLevel || 'intermediate',
-      currentLearner?.availableLearningTime || '30 mins / day',
+      currentLearner?.goal || activeRegistryLearner?.goal || '',
+      currentLearner?.experienceLevel || activeRegistryLearner?.experienceLevel || 'intermediate',
+      currentLearner?.availableLearningTime || activeRegistryLearner?.availableLearningTime || '30 mins / day',
       activeDiagnostic.questionsAsked,
       activeDiagnostic.evaluations
     );
@@ -243,32 +275,25 @@ export default function App() {
     setCurrentLearner(profile);
     setCurrentPathway(pathway);
 
-    LocalStorageManager.saveLearner(profile);
-    LocalStorageManager.savePathway(pathway);
-    LocalStorageManager.setCurrentLearnerId(profile.learnerId);
+    storageManager.saveLearnerProfile(profile);
+    storageManager.saveLearningPathway(pathway);
 
     setCurrentTab('report');
   };
 
-  // Export profile & pathway as JSON
+  // Export full JSON bundle
   const handleExportFullJson = () => {
-    if (!currentLearner) return;
-    const bundle = {
-      exportTimestamp: new Date().toISOString(),
-      learnerProfile: currentLearner,
-      learningPathway: currentPathway,
-      diagnosticSession: activeDiagnostic,
-      vectorDatabaseSample: vectorDb.getAll().slice(0, 10),
-    };
-
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const rawJson = storageManager.exportData();
+    const blob = new Blob([rawJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `PLIA_profile_${currentLearner.subject.toLowerCase()}_${Date.now()}.json`;
+    a.download = `PLIA_database_backup_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const activeLearnerObj = learners.find(l => l.learnerId === activeLearnerId) || learners[0];
 
   return (
     <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
@@ -277,8 +302,13 @@ export default function App() {
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         ollamaConfig={ollamaConfig}
-        activeSubject={currentLearner?.subject || activeDiagnostic?.subject}
-        learnerName={currentLearner?.name}
+        backendConfig={backendConfig}
+        activeSubject={currentLearner?.subject || activeDiagnostic?.subject || activeLearnerObj?.subject}
+        activeLearner={activeLearnerObj}
+        learners={learners}
+        onSwitchLearner={handleSwitchLearner}
+        onOpenNewLearner={() => setIsOnboardingOpen(true)}
+        onOpenOnboarding={() => setIsOnboardingOpen(true)}
         hasActiveDiagnostic={!!activeDiagnostic && !activeDiagnostic.isCompleted}
         vectorCount={vectorCount}
         onToggleAIChat={() => setIsAIChatOpen(prev => !prev)}
@@ -340,11 +370,11 @@ export default function App() {
               pathway={currentPathway}
               onUpdatePathway={updatedPath => {
                 setCurrentPathway(updatedPath);
-                LocalStorageManager.savePathway(updatedPath);
+                storageManager.saveLearningPathway(updatedPath);
               }}
               onUpdateProfile={updatedProfile => {
                 setCurrentLearner(updatedProfile);
-                LocalStorageManager.saveLearner(updatedProfile);
+                storageManager.saveLearnerProfile(updatedProfile);
               }}
               onRetakeDiagnostic={() => {
                 handleStartDiagnostic({
@@ -425,6 +455,24 @@ export default function App() {
         ollamaConfig={ollamaConfig}
         currentSubject={currentLearner?.subject || activeDiagnostic?.subject || 'General Problem Solving'}
         activeConcept={chatConceptContext}
+      />
+
+      {/* Guided Onboarding & Model Pull Modal */}
+      <OnboardingModal
+        isOpen={isOnboardingOpen}
+        onClose={() => setIsOnboardingOpen(false)}
+        ollamaConfig={ollamaConfig}
+        onRefreshOllama={refreshOllama}
+        onCompleteOnboarding={(name, sub, gl) => {
+          setLearners(storageManager.getLearners());
+          handleStartDiagnostic({
+            name,
+            subject: sub,
+            goal: gl,
+            experienceLevel: 'intermediate',
+            availableLearningTime: '30 mins / day',
+          });
+        }}
       />
 
       {/* Footer */}

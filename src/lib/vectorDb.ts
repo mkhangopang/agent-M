@@ -1,446 +1,406 @@
 /**
- * Local Vector Database Engine for PLIA
- * 100% Offline, runs locally with zero external network dependencies.
- * Uses a hybrid dense vector embedding (128-dim normalized n-gram hashed bag-of-words + term weight)
- * and BM25 cosine ranking for sub-millisecond semantic retrieval.
+ * Embedded Vector Database & Semantic Retrieval Engine for PLIA
+ * 
+ * Features:
+ * - Real vector embedding generation via Ollama (`/api/embeddings` / `/api/embed`)
+ * - Fallback high-speed deterministic dense heuristic vector engine for 100% offline degraded mode
+ * - Persistent local embedding cache for instant load times without re-embedding
+ * - Cosine similarity calculation with keyword-overlap boost and domain filtering
+ * - Strict input validation, chunking boundaries, and sanitization for custom user ingestions
+ * - Pre-seeded curated curriculum documents across Core Computer Science, Physics, Calculus, Biology, Machine Learning, and Cognitive Science
  */
 
-import { BloomLevel, VectorDocument, VectorSearchResult } from '../types';
+import { VectorDocument, VectorSearchResult } from '../types';
 
-const VECTOR_DIMENSION = 128;
-const STORAGE_KEY = 'plia_local_vector_db_v1';
+const EMBEDDING_CACHE_STORAGE_KEY = 'plia_vector_embedding_cache_v2';
+const VECTOR_DOCS_STORAGE_KEY = 'plia_custom_vector_docs_v2';
 
-// Deterministic hashing helper
-function hashString(str: string, seed: number = 0): number {
-  let h = seed ^ 0x12345678;
-  for (let i = 0; i < str.length; i++) {
-    h = Math.imul(h ^ str.charCodeAt(i), 0x5bd1e995);
-    h ^= h >>> 15;
-  }
-  return (h >>> 0) % VECTOR_DIMENSION;
-}
-
-// Tokenize text cleanly
-export function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, ' ')
-    .split(/\s+/)
-    .filter(t => t.length > 2);
-}
-
-// Generate a 128-dimensional dense unit vector from text
+// 128-dimensional dense heuristic fallback embedding
 export function generateLocalEmbedding(text: string): number[] {
-  const vector = new Array(VECTOR_DIMENSION).fill(0);
-  const tokens = tokenize(text);
+  const clean = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+  const tokens = clean.split(/\s+/).filter(t => t.length > 1);
+  const dim = 128;
+  const vector = new Array(dim).fill(0);
+
   if (tokens.length === 0) return vector;
 
-  // Single tokens with frequency weighting
-  const termCounts: Record<string, number> = {};
-  for (const token of tokens) {
-    termCounts[token] = (termCounts[token] || 0) + 1;
-  }
-
-  for (const [token, count] of Object.entries(termCounts)) {
-    const weight = 1 + Math.log(count);
-    const idx1 = hashString(token, 42);
-    const idx2 = hashString(token, 1337);
-    vector[idx1] += weight;
-    vector[idx2] += weight * 0.5;
-
-    // Bigrams for context awareness
-    for (let i = 0; i < token.length - 2; i++) {
-      const trigram = token.slice(i, i + 3);
-      const triIdx = hashString(trigram, 99);
-      vector[triIdx] += 0.25;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    let hash = 0;
+    for (let c = 0; c < token.length; c++) {
+      hash = (hash << 5) - hash + token.charCodeAt(c);
+      hash |= 0;
     }
+
+    const pos = Math.abs(hash) % dim;
+    const sign = (hash & 1) === 0 ? 1 : -1;
+    const weight = Math.log(1 + 1 / (i + 1)) * 1.5 + (token.length > 5 ? 1.2 : 0.8);
+    vector[pos] += sign * weight;
+
+    // Secondary hash projection for semantic density
+    const pos2 = Math.abs(hash * 31 + 17) % dim;
+    vector[pos2] += sign * 0.5;
   }
 
-  // Normalize to unit vector for pure cosine similarity
-  let norm = 0;
-  for (let i = 0; i < VECTOR_DIMENSION; i++) {
-    norm += vector[i] * vector[i];
+  // Normalize to unit vector
+  let sumSquares = 0;
+  for (let i = 0; i < dim; i++) {
+    sumSquares += vector[i] * vector[i];
   }
-  norm = Math.sqrt(norm);
+  const magnitude = Math.sqrt(sumSquares);
+  if (magnitude === 0) return vector;
 
-  if (norm > 0) {
-    for (let i = 0; i < VECTOR_DIMENSION; i++) {
-      vector[i] /= norm;
-    }
+  for (let i = 0; i < dim; i++) {
+    vector[i] = vector[i] / magnitude;
   }
 
   return vector;
 }
 
-// Cosine similarity between two unit vectors = dot product
-export function cosineSimilarity(v1: number[], v2: number[]): number {
-  if (!v1 || !v2 || v1.length !== v2.length) return 0;
-  let dot = 0;
-  for (let i = 0; i < v1.length; i++) {
-    dot += v1[i] * v2[i];
+export function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  if (vecA.length !== vecB.length || vecA.length === 0) {
+    // If dimensionalities differ (e.g. Ollama 768-dim vs 128-dim), compute dot product on overlap or 0
+    const minLen = Math.min(vecA.length, vecB.length);
+    if (minLen === 0) return 0;
+    let dot = 0;
+    for (let i = 0; i < minLen; i++) {
+      dot += vecA[i] * vecB[i];
+    }
+    return Math.max(0, Math.min(1, (dot + 1) / 2));
   }
-  return Math.max(0, Math.min(1, dot));
+
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) return 0;
+
+  const rawCos = dotProduct / denominator;
+  // Scale from [-1, 1] to [0, 1]
+  return Math.max(0, Math.min(1, (rawCos + 1) / 2));
 }
 
-// Pre-seeded foundational curriculum and misconception database
-const SEED_DOCUMENTS: Omit<VectorDocument, 'embedding' | 'createdAt'>[] = [
-  // Biology
+const SEED_CURRICULUM_DOCUMENTS: Omit<VectorDocument, 'embedding'>[] = [
+  // Computer Science & Distributed Systems
   {
-    id: 'bio-001',
-    subject: 'Biology',
-    domain: 'Cellular Respiration',
-    topic: 'Glycolysis & Krebs Cycle',
-    bloomLevel: 'understand',
+    id: 'seed-cs-01',
+    subject: 'Computer Science',
+    domain: 'Distributed Systems',
+    topic: 'CAP Theorem & PACELC',
+    content: 'The CAP theorem states that a distributed data store can simultaneously provide at most two of three guarantees: Consistency (every read receives the most recent write or an error), Availability (every request receives a non-error response), and Partition Tolerance (the system continues to operate despite an arbitrary number of dropped or delayed messages). In practice, network partitions (P) are unavoidable, so systems must choose between Consistency (CP) and Availability (AP). PACELC extends CAP: if partition (P), choose Availability (A) or Consistency (C); Else (E), choose Latency (L) or Consistency (C).',
     category: 'curriculum',
-    content: 'Cellular respiration converts glucose and oxygen into ATP, carbon dioxide, and water. Glycolysis occurs in the cytoplasm anaerobically yielding 2 net ATP. The Krebs cycle and Electron Transport Chain occur within the mitochondria requiring oxygen, generating up to 36-38 total ATP.',
-  },
-  {
-    id: 'bio-002',
-    subject: 'Biology',
-    domain: 'Cellular Respiration',
-    topic: 'Anaerobic Lactic Acid Fermentation',
-    bloomLevel: 'apply',
-    category: 'misconception',
-    content: 'Common misconception: Learners often think respiration is simply breathing or that cells can only produce energy when oxygen is present. In reality, glycolysis continues under anaerobic conditions through fermentation (lactic acid in animals, ethanol in yeast) to regenerate NAD+.',
-  },
-  {
-    id: 'bio-003',
-    subject: 'Biology',
-    domain: 'Genetics',
-    topic: 'DNA Replication & Polymerase',
     bloomLevel: 'analyze',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'seed-cs-02',
+    subject: 'Computer Science',
+    domain: 'Distributed Systems',
+    topic: 'Raft Consensus Protocol & State Machine Replication',
+    content: 'Raft is a consensus algorithm designed for understandability. It decomposes consensus into leader election, log replication, and safety. A leader accepts log entries from clients, replicates them across followers, and commits entries once acknowledged by a majority (quorum). Raft guarantees election safety, leader append-only invariant, log matching property, leader completeness, and state machine safety invariants. If leader heartbeats time out, followers transition to candidate and initiate randomized election timers.',
     category: 'curriculum',
-    content: 'DNA replication is semi-conservative. DNA Helicase unwinds the double helix, RNA Primase lays primers, and DNA Polymerase III synthesizes the leading strand continuously 5 to 3 while the lagging strand is synthesized discontinuously as Okazaki fragments joined by DNA Ligase.',
-  },
-  {
-    id: 'bio-004',
-    subject: 'Biology',
-    domain: 'Genetics',
-    topic: 'Dominant vs Recessive Allele Misconception',
-    bloomLevel: 'analyze',
-    category: 'misconception',
-    content: 'Misconception: Dominant traits are automatically the most common in a population or inherently stronger. In truth, allele frequency is dictated by natural selection and genetic drift, not dominance (e.g. Huntington disease is dominant but rare; Type O blood is recessive but prevalent).',
-  },
-  {
-    id: 'bio-005',
-    subject: 'Biology',
-    domain: 'Ecology',
-    topic: 'Trophic Levels & 10% Energy Rule',
     bloomLevel: 'apply',
-    category: 'curriculum',
-    content: 'In ecological food webs, only approximately 10 percent of energy transfers from one trophic level to the next. The remaining 90 percent is lost as heat, metabolic work, and undigested biomass. This thermodynamic constraint strictly limits food chain length.',
+    createdAt: new Date().toISOString(),
   },
-
-  // Computer Science & Programming
   {
-    id: 'cs-001',
+    id: 'seed-cs-03',
     subject: 'Computer Science',
     domain: 'Algorithms',
-    topic: 'Big O Notation & Time Complexity',
-    bloomLevel: 'analyze',
+    topic: 'Dynamic Programming & Optimal Substructure',
+    content: 'Dynamic Programming (DP) solves complex optimization problems by decomposing them into overlapping subproblems with optimal substructure. An optimal solution to the overall problem incorporates optimal solutions to its subproblems. Memoization represents top-down caching of recursive results, while Tabulation represents bottom-up iterative table construction. Identifying state transitions, base conditions, and memory compression (rolling variables) are foundational DP skills.',
     category: 'curriculum',
-    content: 'Big O notation characterizes asymptotic upper bound growth. O(1) constant time, O(log N) binary search on sorted data, O(N) linear scan, O(N log N) merge sort/quick sort average, O(N^2) nested loop comparisons, and O(2^N) exponential recursion without memoization.',
-  },
-  {
-    id: 'cs-002',
-    subject: 'Computer Science',
-    domain: 'Data Structures',
-    topic: 'Hash Tables & Collision Resolution',
-    bloomLevel: 'apply',
-    category: 'curriculum',
-    content: 'Hash tables map keys to array indices via a hash function, providing average O(1) insertion, lookup, and deletion. Collisions are resolved through separate chaining (linked lists or balanced trees per bucket) or open addressing (linear probing, quadratic probing, double hashing).',
-  },
-  {
-    id: 'cs-003',
-    subject: 'Computer Science',
-    domain: 'Programming Paradigms',
-    topic: 'Pass by Reference vs Pass by Value',
     bloomLevel: 'understand',
-    category: 'misconception',
-    content: 'Misconception: Beginners believe JavaScript/Python passes objects by reference. In reality, variables hold reference values (pointers) that are passed by value (call-by-sharing). Reassigning the parameter inside a function does not mutate the external reference.',
+    createdAt: new Date().toISOString(),
   },
   {
-    id: 'cs-004',
+    id: 'seed-cs-04',
     subject: 'Computer Science',
-    domain: 'Asynchronous Programming',
-    topic: 'Event Loop & Call Stack',
+    domain: 'Operating Systems',
+    topic: 'Concurrency & Deadlock Prevention',
+    content: 'Deadlock in concurrent systems occurs when a set of processes are blocked because each process is holding a resource and waiting for another resource held by another process. Coffman conditions: 1. Mutual Exclusion, 2. Hold and Wait, 3. No Preemption, 4. Circular Wait. Deadlock prevention breaks at least one Coffman condition (e.g. strict total ordering on resource acquisition to eliminate circular wait). Lock-free architectures leverage hardware compare-and-swap (CAS) primitives.',
+    category: 'curriculum',
     bloomLevel: 'analyze',
-    category: 'curriculum',
-    content: 'The single-threaded event loop constantly monitors the Call Stack and Task Queues (Microtask Queue for Promises, Macrotask Queue for setTimeout/I/O). Microtasks always drain completely before the next macrotask is processed.',
-  },
-  {
-    id: 'cs-005',
-    subject: 'Computer Science',
-    domain: 'System Design',
-    topic: 'CAP Theorem & Distributed Consistency',
-    bloomLevel: 'evaluate',
-    category: 'curriculum',
-    content: 'The CAP Theorem asserts a distributed system cannot simultaneously guarantee Consistency (every read receives most recent write), Availability (every non-failing node responds), and Partition Tolerance (system continues during network breaks). Under network partitions, systems must trade C or A.',
+    createdAt: new Date().toISOString(),
   },
 
   // Physics
   {
-    id: 'phys-001',
+    id: 'seed-phys-01',
     subject: 'Physics',
-    domain: 'Mechanics',
-    topic: 'Newton Laws of Motion & Net Force',
-    bloomLevel: 'apply',
+    domain: 'Classical Mechanics',
+    topic: 'Newtonian Laws & Inertial Reference Frames',
+    content: 'Newton First Law (Law of Inertia) states that an object continues in its state of rest or uniform rectilinear motion unless acted upon by a net non-zero external force. Velocity is constant when net force is zero. Newton Second Law equates net force to the time rate of change of momentum (F = dp/dt = m*a for constant mass). Newton Third Law dictates that every action entails an equal and opposite reaction acting on separate interacting bodies.',
     category: 'curriculum',
-    content: 'Newton First Law: an object remains in uniform motion unless acted upon by a net external force. Second Law: F_net = m * a. Third Law: for every action force, there is an equal and opposite reaction force acting on different interacting bodies.',
-  },
-  {
-    id: 'phys-002',
-    subject: 'Physics',
-    domain: 'Mechanics',
-    topic: 'Motion Requires Force Misconception',
     bloomLevel: 'understand',
-    category: 'misconception',
-    content: 'Aristotelian misconception: Believing a continuous forward force is required to sustain constant velocity motion. By Newton First Law of Inertia, constant velocity requires zero net force; force is only required to change velocity (acceleration).',
+    createdAt: new Date().toISOString(),
   },
   {
-    id: 'phys-003',
+    id: 'seed-phys-02',
     subject: 'Physics',
     domain: 'Thermodynamics',
-    topic: 'Entropy & Second Law',
-    bloomLevel: 'evaluate',
+    topic: 'Entropy & Second Law of Thermodynamics',
+    content: 'The Second Law of Thermodynamics states that the total entropy of an isolated system never decreases over time; in spontaneous natural processes, entropy increases toward thermodynamic equilibrium. Carnot efficiency represents the theoretical upper limit for heat engines operating between temperatures Thot and Tcold: eta = 1 - (Tcold / Thot). Microscopic statistical mechanics defines entropy via Boltzmann formula: S = k_B * ln(Omega), where Omega is the microstate multiplicity.',
     category: 'curriculum',
-    content: 'The Second Law of Thermodynamics states the total entropy of an isolated system always increases over time. Heat flows spontaneously from higher temperature to lower temperature reservoirs; converting heat entirely into mechanical work is impossible without ambient losses.',
+    bloomLevel: 'analyze',
+    createdAt: new Date().toISOString(),
   },
   {
-    id: 'phys-004',
+    id: 'seed-phys-03',
     subject: 'Physics',
     domain: 'Electromagnetism',
-    topic: 'Faraday Induction & Lenz Law',
-    bloomLevel: 'analyze',
+    topic: 'Maxwell Equations & Electromagnetic Waves',
+    content: 'Maxwell equations synthesize classical electromagnetism into four partial differential equations: Gauss Law for electric fields (div E = rho / epsilon_0), Gauss Law for magnetism (div B = 0), Faraday Law of induction (curl E = -dB/dt), and Ampere-Maxwell Law with displacement current (curl B = mu_0*J + mu_0*epsilon_0*dE/dt). Combining curl equations in vacuum yields the electromagnetic wave equation propagating at speed c = 1/sqrt(mu_0 * epsilon_0).',
     category: 'curriculum',
-    content: 'Faraday Law states an induced electromotive force (EMF) in any closed loop equals the negative rate of change of magnetic flux through the loop. Lenz Law explains the negative sign: the induced current creates a magnetic field that opposes the change in magnetic flux.',
+    bloomLevel: 'evaluate',
+    createdAt: new Date().toISOString(),
   },
 
-  // Mathematics
+  // Mathematics & Calculus
   {
-    id: 'math-001',
-    subject: 'Mathematics',
-    domain: 'Calculus',
-    topic: 'Derivatives & Rates of Change',
-    bloomLevel: 'understand',
-    category: 'curriculum',
-    content: 'The derivative f prime of x represents the instantaneous rate of change of a function, defined as the limit of [f(x+h) - f(x)] / h as h approaches 0. Geometrically, it is the exact slope of the tangent line to the curve at point x.',
-  },
-  {
-    id: 'math-002',
+    id: 'seed-math-01',
     subject: 'Mathematics',
     domain: 'Calculus',
     topic: 'Fundamental Theorem of Calculus',
-    bloomLevel: 'apply',
+    content: 'The Fundamental Theorem of Calculus bridges differentiation and integration. Part 1 establishes that if f is continuous on [a,b] and F(x) = integral_a^x f(t)dt, then F is differentiable and F prime(x) = f(x). Part 2 establishes that integral_a^b f(x)dx = F(b) - F(a) where F is any antiderivative of f. This confirms integration and differentiation are inverse operations of continuous real functions.',
     category: 'curriculum',
-    content: 'The Fundamental Theorem connects differentiation and integration. Part 1: the derivative of an accumulation function integral from a to x of f(t)dt is f(x). Part 2: the definite integral from a to b of f(x)dx equals F(b) - F(a), where F is any antiderivative.',
-  },
-  {
-    id: 'math-003',
-    subject: 'Mathematics',
-    domain: 'Probability & Statistics',
-    topic: 'Conditional Probability & Bayes Theorem',
-    bloomLevel: 'analyze',
-    category: 'curriculum',
-    content: 'Bayes Theorem updates prior beliefs with observed evidence: P(A|B) = [P(B|A) * P(A)] / P(B). It separates true positive rate (sensitivity) from false alarm rates, showing why rare disease tests can have surprisingly low posterior positive predictive values.',
-  },
-  {
-    id: 'math-004',
-    subject: 'Mathematics',
-    domain: 'Probability',
-    topic: 'Gambler Fallacy Misconception',
     bloomLevel: 'understand',
-    category: 'misconception',
-    content: 'Misconception: Thinking past independent random events alter future probabilities (e.g., believing a fair coin flipped 5 tails in a row is "due" for heads). Each independent trial retains exactly P(Heads) = 0.5.',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'seed-math-02',
+    subject: 'Mathematics',
+    domain: 'Linear Algebra',
+    topic: 'Eigenvalues, Eigenvectors & Spectral Decomposition',
+    content: 'For an n x n square matrix A, a non-zero vector v is an eigenvector and lambda is its corresponding eigenvalue if A*v = lambda*v. Geometric interpretation: matrix transformation acts purely as a scalar stretch along the direction of v without rotation. Solved via characteristic polynomial det(A - lambda*I) = 0. Symmetric matrices have real eigenvalues and orthogonal eigenvectors, admitting spectral diagonalization A = Q * Lambda * Q^T.',
+    category: 'curriculum',
+    bloomLevel: 'apply',
+    createdAt: new Date().toISOString(),
   },
 
-  // Data Science & AI
+  // Biology
   {
-    id: 'ai-001',
-    subject: 'AI & Data Science',
-    domain: 'Machine Learning',
-    topic: 'Bias-Variance Tradeoff & Regularization',
-    bloomLevel: 'analyze',
+    id: 'seed-bio-01',
+    subject: 'Biology',
+    domain: 'Cellular Biology',
+    topic: 'Cellular Respiration & Chemiosmosis',
+    content: 'Cellular respiration converts biochemical energy from glucose into adenosine triphosphate (ATP) across three stages: Glycolysis (cytoplasm, anaerobic, net 2 ATP, 2 NADH), Krebs / Citric Acid Cycle (mitochondrial matrix, generates NADH and FADH2), and Oxidative Phosphorylation (inner mitochondrial membrane). Electron Transport Chain pumps protons into the intermembrane space, establishing an electrochemical proton gradient (proton motive force). ATP Synthase synthesizes ATP via chemiosmosis.',
     category: 'curriculum',
-    content: 'Supervised models face bias (underfitting from overly rigid assumptions) versus variance (overfitting to training noise). L1 Lasso regularization forces sparse zero weights for feature selection, while L2 Ridge penalizes large coefficients smoothly.',
+    bloomLevel: 'understand',
+    createdAt: new Date().toISOString(),
   },
   {
-    id: 'ai-002',
-    subject: 'AI & Data Science',
+    id: 'seed-bio-02',
+    subject: 'Biology',
+    domain: 'Genetics',
+    topic: 'Mendelian Inheritance & Hardy-Weinberg Equilibrium',
+    content: 'Mendel laws encompass Segregation (allele pairs separate during gamete formation) and Independent Assortment (genes for different traits assort independently if unlinked). Dominant alleles express in heterozygotes but do not necessarily equate to higher population frequency. Hardy-Weinberg equilibrium (p^2 + 2pq + q^2 = 1) models allele and genotype frequencies under assumptions of no mutation, no gene flow, random mating, infinite population size, and no natural selection.',
+    category: 'curriculum',
+    bloomLevel: 'analyze',
+    createdAt: new Date().toISOString(),
+  },
+
+  // Machine Learning
+  {
+    id: 'seed-ml-01',
+    subject: 'Machine Learning',
     domain: 'Deep Learning',
     topic: 'Transformer Architecture & Self-Attention',
-    bloomLevel: 'evaluate',
+    content: 'The Transformer architecture replaces recurrence with multi-head self-attention. Queries (Q), Keys (K), and Values (V) are projected linearly: Attention(Q,K,V) = softmax(Q * K^T / sqrt(d_k)) * V. Scaling by sqrt(d_k) prevents vanishing gradients in softmax at high dimensions. Positional encodings inject token sequence order. Residual connections and LayerNorm stabilize deep gradient flow.',
     category: 'curriculum',
-    content: 'Transformers replace recurrent sequential processing with Multi-Head Self-Attention. Keys, Queries, and Values calculate softmax(Q * K^T / sqrt(d_k)) * V, enabling parallel token interaction across arbitrary sequence distances without vanishing gradient bottlenecks.',
-  },
-
-  // Chemistry
-  {
-    id: 'chem-001',
-    subject: 'Chemistry',
-    domain: 'Chemical Equilibrium',
-    topic: 'Le Chatelier Principle',
-    bloomLevel: 'apply',
-    category: 'curriculum',
-    content: 'When a chemical system at dynamic equilibrium experiences a disturbance (concentration, temperature, pressure), the system shifts in the direction that counteracts the applied change to re-establish the equilibrium constant K_eq.',
-  },
-
-  // Economics
-  {
-    id: 'econ-001',
-    subject: 'Economics',
-    domain: 'Microeconomics',
-    topic: 'Price Elasticity of Demand',
     bloomLevel: 'analyze',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'seed-ml-02',
+    subject: 'Machine Learning',
+    domain: 'Optimization',
+    topic: 'Backpropagation & Loss Gradients',
+    content: 'Backpropagation computes the gradient of the loss function with respect to every weight in a neural network via recursive application of the multivariable calculus chain rule. In forward pass, activations are computed and cached. In backward pass, error sensitivities (delta) are propagated from output layer back to input layer. Optimization algorithms (SGD, Adam, RMSProp) utilize these gradients to iteratively minimize empirical loss.',
     category: 'curriculum',
-    content: 'Price elasticity measures the percentage change in quantity demanded relative to percentage change in price. If elasticity > 1, demand is elastic (revenue drops if price increases); if < 1, inelastic (necessities where revenue rises with price).',
+    bloomLevel: 'apply',
+    createdAt: new Date().toISOString(),
   },
 ];
 
-class LocalVectorDatabase {
+export class LocalVectorDatabase {
   private documents: Map<string, VectorDocument> = new Map();
-  private isInitialized = false;
+  private embeddingCache: Map<string, number[]> = new Map();
 
   constructor() {
-    this.init();
+    this.loadEmbeddingCache();
+    this.initializeDocuments();
+    this.loadCustomDocuments();
   }
 
-  private init(): void {
-    if (this.isInitialized) return;
-
+  private loadEmbeddingCache(): void {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(EMBEDDING_CACHE_STORAGE_KEY);
       if (stored) {
-        const parsed: VectorDocument[] = JSON.parse(stored);
+        const parsed = JSON.parse(stored) as Record<string, number[]>;
+        for (const [key, vec] of Object.entries(parsed)) {
+          if (Array.isArray(vec) && vec.length > 0) {
+            this.embeddingCache.set(key, vec);
+          }
+        }
+      }
+    } catch {
+      // cache initialize fallback
+    }
+  }
+
+  private saveEmbeddingCache(): void {
+    try {
+      const obj: Record<string, number[]> = {};
+      // Cap cache size at 500 entries to prevent storage overflow
+      let count = 0;
+      for (const [k, v] of this.embeddingCache.entries()) {
+        if (count++ > 500) break;
+        obj[k] = v;
+      }
+      localStorage.setItem(EMBEDDING_CACHE_STORAGE_KEY, JSON.stringify(obj));
+    } catch (e) {
+      console.warn('Could not save vector embedding cache:', e);
+    }
+  }
+
+  private initializeDocuments(): void {
+    for (const doc of SEED_CURRICULUM_DOCUMENTS) {
+      const embedding = this.getOrGenerateEmbedding(doc.content);
+      this.documents.set(doc.id, {
+        ...doc,
+        embedding,
+      });
+    }
+  }
+
+  private loadCustomDocuments(): void {
+    try {
+      const stored = localStorage.getItem(VECTOR_DOCS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as VectorDocument[];
         for (const doc of parsed) {
-          if (!doc.embedding) {
-            doc.embedding = generateLocalEmbedding(`${doc.topic} ${doc.domain} ${doc.content}`);
+          if (!doc.embedding || doc.embedding.length === 0) {
+            doc.embedding = this.getOrGenerateEmbedding(doc.content);
           }
           this.documents.set(doc.id, doc);
         }
       }
-    } catch (e) {
-      console.warn('Could not read vector store from localStorage, using memory seed:', e);
+    } catch {
+      // ignore
     }
-
-    // Ensure seed documents exist
-    if (this.documents.size === 0) {
-      for (const seed of SEED_DOCUMENTS) {
-        const fullText = `${seed.topic} ${seed.domain} ${seed.content}`;
-        const doc: VectorDocument = {
-          ...seed,
-          embedding: generateLocalEmbedding(fullText),
-          createdAt: new Date().toISOString(),
-        };
-        this.documents.set(doc.id, doc);
-      }
-      this.persist();
-    }
-
-    this.isInitialized = true;
   }
 
-  private persist(): void {
+  private saveCustomDocuments(): void {
     try {
-      const docsArray = Array.from(this.documents.values());
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(docsArray));
+      const customDocs = Array.from(this.documents.values()).filter(
+        d => !SEED_CURRICULUM_DOCUMENTS.some(s => s.id === d.id)
+      );
+      localStorage.setItem(VECTOR_DOCS_STORAGE_KEY, JSON.stringify(customDocs));
     } catch (e) {
-      console.warn('LocalStorage save failed for vector DB:', e);
+      console.warn('Failed to persist custom vector documents:', e);
     }
   }
 
-  public getAll(): VectorDocument[] {
-    return Array.from(this.documents.values());
-  }
-
-  public getById(id: string): VectorDocument | undefined {
-    return this.documents.get(id);
-  }
-
-  public insert(doc: Omit<VectorDocument, 'embedding' | 'createdAt'> & { embedding?: number[]; createdAt?: string }): VectorDocument {
-    const fullText = `${doc.topic} ${doc.domain} ${doc.content}`;
-    const embedding = doc.embedding || generateLocalEmbedding(fullText);
-    const completeDoc: VectorDocument = {
-      ...doc,
-      embedding,
-      createdAt: doc.createdAt || new Date().toISOString(),
-    };
-    this.documents.set(completeDoc.id, completeDoc);
-    this.persist();
-    return completeDoc;
-  }
-
-  public delete(id: string): boolean {
-    const deleted = this.documents.delete(id);
-    if (deleted) this.persist();
-    return deleted;
-  }
-
-  public clear(): void {
-    this.documents.clear();
-    this.persist();
-  }
-
-  public resetToSeeds(): void {
-    this.documents.clear();
-    for (const seed of SEED_DOCUMENTS) {
-      const fullText = `${seed.topic} ${seed.domain} ${seed.content}`;
-      const doc: VectorDocument = {
-        ...seed,
-        embedding: generateLocalEmbedding(fullText),
-        createdAt: new Date().toISOString(),
-      };
-      this.documents.set(doc.id, doc);
+  private getOrGenerateEmbedding(text: string): number[] {
+    const key = text.slice(0, 150);
+    if (this.embeddingCache.has(key)) {
+      return this.embeddingCache.get(key)!;
     }
-    this.persist();
+    const local = generateLocalEmbedding(text);
+    this.embeddingCache.set(key, local);
+    return local;
   }
 
   /**
-   * Fast Hybrid Search (Cosine Vector Similarity + Token Keyword Overlap)
+   * Asynchronously upgrades embeddings using real Ollama vectors when available
+   */
+  public async upgradeEmbeddingsWithOllama(
+    embedFn: (text: string) => Promise<number[]>,
+    onProgress?: (current: number, total: number) => void
+  ): Promise<void> {
+    const docs = Array.from(this.documents.values());
+    let updated = 0;
+    for (let i = 0; i < docs.length; i++) {
+      const doc = docs[i];
+      const key = `ollama_${doc.content.slice(0, 150)}`;
+      if (!this.embeddingCache.has(key)) {
+        try {
+          const vec = await embedFn(doc.content);
+          if (vec && vec.length > 0) {
+            doc.embedding = vec;
+            this.embeddingCache.set(key, vec);
+            this.documents.set(doc.id, doc);
+            updated++;
+          }
+        } catch {
+          // keep heuristic
+        }
+      }
+      if (onProgress) {
+        onProgress(i + 1, docs.length);
+      }
+    }
+    if (updated > 0) {
+      this.saveEmbeddingCache();
+      this.saveCustomDocuments();
+    }
+  }
+
+  /**
+   * Search documents by semantic cosine similarity and token relevance
    */
   public search(
     query: string,
     options: {
       subject?: string;
-      category?: string;
-      bloomLevel?: BloomLevel;
+      domain?: string;
+      category?: VectorDocument['category'];
       topK?: number;
       minScore?: number;
+      queryEmbedding?: number[];
     } = {}
   ): VectorSearchResult[] {
-    const { subject, category, bloomLevel, topK = 5, minScore = 0.1 } = options;
-    const queryVector = generateLocalEmbedding(query);
-    const queryTokens = new Set(tokenize(query));
+    const { subject, domain, category, topK = 4, minScore = 0.1, queryEmbedding } = options;
+    const cleanQuery = query.trim().toLowerCase();
+    if (!cleanQuery) return [];
+
+    const qVec = queryEmbedding || this.getOrGenerateEmbedding(cleanQuery);
+    const queryTokens = cleanQuery.split(/\W+/).filter(t => t.length > 2);
 
     const results: VectorSearchResult[] = [];
 
     for (const doc of this.documents.values()) {
-      // Filter by subject if specified (case-insensitive substring)
-      if (subject && subject.trim().length > 0) {
-        const subLower = subject.toLowerCase();
-        const docSubLower = doc.subject.toLowerCase();
-        if (!docSubLower.includes(subLower) && !subLower.includes(docSubLower)) {
-          // If neither contains the other, skip
-          continue;
-        }
+      if (subject && doc.subject.toLowerCase() !== subject.toLowerCase()) {
+        continue;
+      }
+      if (domain && doc.domain.toLowerCase() !== domain.toLowerCase()) {
+        continue;
+      }
+      if (category && doc.category !== category) {
+        continue;
       }
 
-      if (category && doc.category !== category) continue;
-      if (bloomLevel && doc.bloomLevel && doc.bloomLevel !== bloomLevel) continue;
+      const docVec = doc.embedding || this.getOrGenerateEmbedding(doc.content);
+      const similarity = cosineSimilarity(qVec, docVec);
 
-      const cosScore = doc.embedding ? cosineSimilarity(queryVector, doc.embedding) : 0;
-
-      // Keyword token overlap bonus
-      const docTokens = tokenize(`${doc.topic} ${doc.domain} ${doc.content}`);
+      // Keyword token boost
+      const docText = `${doc.topic} ${doc.content}`.toLowerCase();
       const matchedTokens: string[] = [];
-      for (const dt of docTokens) {
-        if (queryTokens.has(dt) && !matchedTokens.includes(dt)) {
-          matchedTokens.push(dt);
+      for (const token of queryTokens) {
+        if (docText.includes(token)) {
+          matchedTokens.push(token);
         }
       }
 
-      const tokenBonus = Math.min(0.3, matchedTokens.length * 0.08);
-      const combinedScore = Math.min(1.0, cosScore * 0.7 + tokenBonus);
+      const tokenBoost = queryTokens.length > 0 ? (matchedTokens.length / queryTokens.length) * 0.25 : 0;
+      const combinedScore = Math.min(1, similarity * 0.75 + tokenBoost);
 
       if (combinedScore >= minScore) {
         results.push({
@@ -451,40 +411,136 @@ class LocalVectorDatabase {
       }
     }
 
-    // Sort descending by score
     results.sort((a, b) => b.similarityScore - a.similarityScore);
     return results.slice(0, topK);
   }
 
   /**
-   * Chunk and ingest raw learner notes or curriculum textbook text
+   * Strict input validation and sanitization for custom user text ingestion
    */
   public ingestCustomText(
     subject: string,
-    title: string,
-    rawText: string,
-    domain: string = 'Learner Ingested Notes'
-  ): number {
-    const paragraphs = rawText
-      .split(/\n\s*\n/)
-      .map(p => p.trim())
-      .filter(p => p.length > 30);
+    domain: string,
+    topic: string,
+    rawContent: string,
+    category: VectorDocument['category'] = 'user_note',
+    learnerId?: string
+  ): { success: boolean; chunksIngested: number; error?: string } {
+    // 1. Sanitize & trim inputs
+    const cleanSubject = (subject || 'General').trim().slice(0, 80);
+    const cleanDomain = (domain || 'Custom Domain').trim().slice(0, 80);
+    const cleanTopic = (topic || 'Imported Note').trim().slice(0, 120);
+    const cleanContent = rawContent.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
 
-    let count = 0;
-    for (let i = 0; i < paragraphs.length; i++) {
-      const chunk = paragraphs[i];
-      const id = `user-doc-${Date.now()}-${i}`;
-      this.insert({
-        id,
-        subject,
-        domain,
-        topic: `${title} (Section ${i + 1})`,
-        content: chunk,
-        category: 'user_note',
-      });
-      count++;
+    // 2. Bound checks
+    if (!cleanContent || cleanContent.length < 10) {
+      return { success: false, chunksIngested: 0, error: 'Document content is too short (min 10 characters).' };
     }
-    return count;
+
+    const MAX_CONTENT_LENGTH = 500000; // 500k characters max
+    if (cleanContent.length > MAX_CONTENT_LENGTH) {
+      return { success: false, chunksIngested: 0, error: `Content exceeds max limit of ${MAX_CONTENT_LENGTH} characters.` };
+    }
+
+    // 3. Chunk text cleanly by paragraphs and sentences
+    const CHUNK_SIZE = 800;
+    const CHUNK_OVERLAP = 150;
+    const chunks: string[] = [];
+
+    let startIndex = 0;
+    while (startIndex < cleanContent.length && chunks.length < 100) {
+      let endIndex = Math.min(startIndex + CHUNK_SIZE, cleanContent.length);
+
+      // Find sentence or paragraph break near the end of chunk
+      if (endIndex < cleanContent.length) {
+        const breakOffset = cleanContent.slice(endIndex - 80, endIndex + 40).search(/(\.\s|\n\n)/);
+        if (breakOffset !== -1) {
+          endIndex = endIndex - 80 + breakOffset + 1;
+        }
+      }
+
+      const chunkText = cleanContent.slice(startIndex, endIndex).trim();
+      if (chunkText.length > 20) {
+        chunks.push(chunkText);
+      }
+
+      if (endIndex >= cleanContent.length) break;
+      startIndex = Math.max(startIndex + 1, endIndex - CHUNK_OVERLAP);
+    }
+
+    if (chunks.length === 0) {
+      return { success: false, chunksIngested: 0, error: 'Failed to extract valid text chunks.' };
+    }
+
+    // 4. Ingest each chunk as a vector document
+    const now = new Date().toISOString();
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkDoc: VectorDocument = {
+        id: `user-doc-${Date.now()}-${i}`,
+        subject: cleanSubject,
+        domain: cleanDomain,
+        topic: chunks.length > 1 ? `${cleanTopic} (Part ${i + 1}/${chunks.length})` : cleanTopic,
+        content: chunks[i],
+        category,
+        embedding: this.getOrGenerateEmbedding(chunks[i]),
+        metadata: {
+          chunkIndex: i + 1,
+          totalChunks: chunks.length,
+          learnerId: learnerId || 'default',
+        },
+        createdAt: now,
+      };
+
+      this.documents.set(chunkDoc.id, chunkDoc);
+    }
+
+    this.saveCustomDocuments();
+    return { success: true, chunksIngested: chunks.length };
+  }
+
+  public getAllDocuments(): VectorDocument[] {
+    return Array.from(this.documents.values());
+  }
+
+  public getAll(): VectorDocument[] {
+    return this.getAllDocuments();
+  }
+
+  public getDocumentCount(): number {
+    return this.documents.size;
+  }
+
+  public deleteDocument(id: string): boolean {
+    if (this.documents.has(id)) {
+      this.documents.delete(id);
+      this.saveCustomDocuments();
+      return true;
+    }
+    return false;
+  }
+
+  public delete(id: string): boolean {
+    return this.deleteDocument(id);
+  }
+
+  public resetToSeeds(): void {
+    this.documents.clear();
+    this.initializeDocuments();
+    try {
+      localStorage.removeItem(VECTOR_DOCS_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
+  public clearCustomDocuments(): void {
+    const seedIds = new Set(SEED_CURRICULUM_DOCUMENTS.map(s => s.id));
+    for (const id of Array.from(this.documents.keys())) {
+      if (!seedIds.has(id)) {
+        this.documents.delete(id);
+      }
+    }
+    this.saveCustomDocuments();
   }
 }
 
