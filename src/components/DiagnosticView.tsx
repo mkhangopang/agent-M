@@ -30,6 +30,8 @@ interface DiagnosticViewProps {
   onCompleteDiagnostic: () => void;
   isEvaluating: boolean;
   lastEvaluation: DiagnosticAnswerEvaluation | null;
+  onMutateQuestion?: (newQuestion: DiagnosticQuestion) => void;
+  onOpenAIChat?: (concept?: string) => void;
 }
 
 const BLOOM_COLORS: Record<BloomLevel, { bg: string; text: string; border: string }> = {
@@ -49,11 +51,14 @@ export const DiagnosticView: React.FC<DiagnosticViewProps> = ({
   onCompleteDiagnostic,
   isEvaluating,
   lastEvaluation,
+  onMutateQuestion,
+  onOpenAIChat,
 }) => {
   const [answerText, setAnswerText] = useState('');
   const [confidence, setConfidence] = useState<number>(75);
   const [showConfidence, setShowConfidence] = useState(true);
   const [showVectorContext, setShowVectorContext] = useState(false);
+  const [isMutatingQuestion, setIsMutatingQuestion] = useState(false);
 
   // Retrieve vector context for current question
   const vectorSources = React.useMemo(() => {
@@ -62,6 +67,74 @@ export const DiagnosticView: React.FC<DiagnosticViewProps> = ({
       topK: 2,
     });
   }, [currentQuestion]);
+
+  const handleMutateQuestionWithAI = async () => {
+    if (!onMutateQuestion || isMutatingQuestion) return;
+    setIsMutatingQuestion(true);
+
+    try {
+      const prompt = `Generate a completely novel, realistic diagnostic problem for:
+Subject: "${currentQuestion.subject}"
+Domain: "${currentQuestion.domain}"
+Bloom Level: "${currentQuestion.bloomLevel}"
+Difficulty: "${currentQuestion.difficulty}"
+
+Make it an authentic real-world scenario or applied problem.
+Return valid JSON only matching:
+{
+  "id": "dyn-q-${Date.now()}",
+  "questionNumber": ${currentQuestion.questionNumber},
+  "subject": "${currentQuestion.subject}",
+  "domain": "${currentQuestion.domain}",
+  "bloomLevel": "${currentQuestion.bloomLevel}",
+  "difficulty": "${currentQuestion.difficulty}",
+  "questionType": "open_response",
+  "question": "Clear, direct, challenging problem prompt",
+  "contextScenario": "Realistic workplace, laboratory, or systems engineering scenario setting the stage",
+  "rubric": {
+    "noUnderstanding": "Fails to identify core mechanism",
+    "partialUnderstanding": "Identifies some factors but misses boundary invariants",
+    "thoroughUnderstanding": "Fully articulates governing principles and edge-cases"
+  },
+  "estimatedTimeSeconds": 90
+}`;
+
+      const fallback: DiagnosticQuestion = {
+        id: `dyn-q-${Date.now()}`,
+        questionNumber: currentQuestion.questionNumber,
+        subject: currentQuestion.subject,
+        domain: currentQuestion.domain,
+        bloomLevel: currentQuestion.bloomLevel,
+        difficulty: currentQuestion.difficulty,
+        questionType: 'open_response',
+        question: `In an active production system in ${currentQuestion.domain}, an unexpected anomaly causes state divergence under 2x load. How do you isolate the root cause and restore deterministic equilibrium?`,
+        contextScenario: `You are acting as lead diagnostic auditor for a high-availability ${currentQuestion.subject} pipeline.`,
+        rubric: {
+          noUnderstanding: 'Fails to address state invariants',
+          partialUnderstanding: 'Suggests ad-hoc restarts without isolating the root cause',
+          thoroughUnderstanding: 'Applies rigorous first-principles analysis and proposes bounded, idempotent mitigation',
+        },
+        estimatedTimeSeconds: 90,
+      };
+
+      const res = await ollamaService.generateStructured<DiagnosticQuestion>(
+        'You are an expert diagnostic exam architect. Return valid JSON only.',
+        prompt,
+        {
+          queryForVectorContext: `${currentQuestion.domain} assessment`,
+          subject: currentQuestion.subject,
+          fallbackGenerator: () => fallback,
+        }
+      );
+
+      onMutateQuestion(res.data);
+      setAnswerText('');
+    } catch (e) {
+      console.error('Failed to mutate question:', e);
+    } finally {
+      setIsMutatingQuestion(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,12 +211,43 @@ export const DiagnosticView: React.FC<DiagnosticViewProps> = ({
 
       {/* Main Question & Answer Card */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
-        {/* Question Text */}
-        <div className="space-y-3">
+        {/* Question Header Actions */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
           <div className="flex items-center space-x-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
             <BookOpen className="w-4 h-4 text-indigo-400" />
             <span>Diagnostic Prompt ({currentQuestion.questionType.replace(/_/g, ' ')})</span>
           </div>
+
+          <div className="flex items-center space-x-2">
+            {/* Llama Dynamic Question Mutator */}
+            <button
+              type="button"
+              onClick={handleMutateQuestionWithAI}
+              disabled={isMutatingQuestion || isEvaluating}
+              className="px-3 py-1.5 rounded-xl bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/80 text-indigo-300 text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer disabled:opacity-50"
+              title="Generate a fresh, unique real-world scenario question with local Llama"
+            >
+              <Sparkles className={`w-3.5 h-3.5 ${isMutatingQuestion ? 'animate-spin' : ''}`} />
+              <span>{isMutatingQuestion ? 'Synthesizing...' : '✨ Generate Novel Scenario (Llama)'}</span>
+            </button>
+
+            {/* Socratic AI Mentor trigger */}
+            {onOpenAIChat && (
+              <button
+                type="button"
+                onClick={() => onOpenAIChat(`${currentQuestion.domain}: ${currentQuestion.question}`)}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer"
+                title="Open Socratic Copilot drawer for guidance"
+              >
+                <Brain className="w-3.5 h-3.5 text-indigo-400" />
+                <span>🧠 Socratic Copilot</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Question Text */}
+        <div className="space-y-3">
           <p className="text-base sm:text-lg text-slate-100 font-medium leading-relaxed">
             {currentQuestion.question}
           </p>

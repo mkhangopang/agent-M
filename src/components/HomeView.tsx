@@ -13,6 +13,8 @@ import {
   BarChart3,
   RotateCcw,
   Zap,
+  RotateCw,
+  MessageSquare,
 } from 'lucide-react';
 import { LearnerProfile } from '../types';
 
@@ -32,14 +34,14 @@ interface HomeViewProps {
 }
 
 const PRESET_SUBJECTS = [
-  { name: 'Biology', icon: '🧬', desc: 'Cellular respiration, genetics, ecology, physiology' },
-  { name: 'Computer Science', icon: '💻', desc: 'Algorithms, data structures, async systems, design' },
-  { name: 'Physics', icon: '⚡', desc: 'Mechanics, thermodynamics, electromagnetism, optics' },
-  { name: 'Mathematics', icon: '📐', desc: 'Calculus, linear algebra, probability, mathematical proof' },
-  { name: 'AI & Data Science', icon: '🤖', desc: 'Machine learning, neural nets, transformers, statistics' },
-  { name: 'Chemistry', icon: '🧪', desc: 'Equilibrium, kinetics, organic mechanisms, bonding' },
-  { name: 'Economics', icon: '📈', desc: 'Microeconomics, macro models, elasticity, game theory' },
-  { name: 'English & Logic', icon: '✍️', desc: 'Critical analysis, argumentation, rhetorical strategies' },
+  { name: 'Computer Science', icon: '💻', desc: 'Distributed systems, memory management, algorithms & async concurrency' },
+  { name: 'AI & Data Science', icon: '🤖', desc: 'Transformer KV-cache, gradient dynamics, statistical inference' },
+  { name: 'Biology', icon: '🧬', desc: 'Cellular respiration, CRISPR genetics, ecology & bioenergetics' },
+  { name: 'Physics', icon: '⚡', desc: 'Orbital resonance, thermodynamic cycles, quantum decoherence' },
+  { name: 'Mathematics', icon: '📐', desc: 'Differential stability, matrix eigenvalues, cryptographic lattices' },
+  { name: 'Chemistry', icon: '🧪', desc: 'Reaction kinetics, chemical equilibria, electrochemical degradation' },
+  { name: 'Economics', icon: '📈', desc: 'Macro liquidity shocks, market maker slippage, game theory' },
+  { name: 'English & Logic', icon: '✍️', desc: 'Epistemic logic, fallacy identification, rhetorical deconstruction' },
 ];
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -51,7 +53,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onGoToReport,
 }) => {
   const [name, setName] = useState(activeProfile?.name || '');
-  const [selectedSubject, setSelectedSubject] = useState(activeProfile?.subject || 'Biology');
+  const [selectedSubject, setSelectedSubject] = useState(activeProfile?.subject || 'Computer Science');
   const [customSubject, setCustomSubject] = useState('');
   const [goal, setGoal] = useState(activeProfile?.goal || '');
   const [experienceLevel, setExperienceLevel] = useState<'beginner' | 'intermediate' | 'advanced'>(
@@ -80,7 +82,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       <div className="text-center space-y-4 max-w-3xl mx-auto">
         <div className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-indigo-950/60 border border-indigo-800/60 text-indigo-300 text-xs font-medium">
           <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Offline-First Adaptive Learning & Diagnostic Agent</span>
+          <span>Local Llama AI Real-World Problem Solving Engine</span>
         </div>
 
         <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-slate-100 tracking-tight">
@@ -88,8 +90,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </h1>
 
         <p className="text-slate-300 text-base sm:text-lg leading-relaxed">
-          An adaptive AI learning coach powered by your local Ollama LLM and embedded vector database.
-          Diagnoses your cognitive learning stage across Bloom&apos;s Taxonomy, pinpoints misconceptions, and builds an evolving mastery pathway.
+          Solve authentic production incidents, test edge-case hypotheses, and diagnose cognitive stages with your offline Llama model and local vector database.
         </p>
 
         {/* Quick Resume Card if user has existing progress */}
@@ -115,7 +116,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               {hasActiveDiagnostic ? (
                 <button
                   onClick={onResumeDiagnostic}
-                  className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center justify-center space-x-1.5 shadow-sm transition-all"
+                  className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center justify-center space-x-1.5 shadow-sm transition-all cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Resume Diagnostic</span>
@@ -124,13 +125,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <>
                   <button
                     onClick={onGoToReport}
-                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-all"
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-all cursor-pointer"
                   >
                     View Report
                   </button>
                   <button
                     onClick={onGoToDashboard}
-                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-1.5 shadow-sm transition-all"
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center space-x-1.5 shadow-sm transition-all cursor-pointer"
                   >
                     <span>Learning Dashboard</span>
                     <ArrowRight className="w-3.5 h-3.5" />
@@ -145,14 +146,14 @@ export const HomeView: React.FC<HomeViewProps> = ({
       {/* Main Intake Form */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left Column: Interactive Setup Form */}
-        <div className="lg:col-span-7 bg-[#0F172A] border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
+        <div className="lg:col-span-7 bg-[#0F172A] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-6">
           <div className="border-b border-slate-800 pb-4">
             <h2 className="text-xl font-bold text-white flex items-center space-x-2">
               <Target className="w-5 h-5 text-indigo-400" />
-              <span>Learner Intake & Subject Setup</span>
+              <span>Learner Intake & Subject Calibration</span>
             </h2>
             <p className="text-xs text-slate-400 mt-1">
-              Provide your learning focus. PLIA will calibrate 10–15 diagnostic questions to map your cognitive stage.
+              Select or type any subject. PLIA uses real-time local Llama models to dynamically generate novel real-world diagnostic problems.
             </p>
           </div>
 
@@ -179,7 +180,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsCustom(!isCustom)}
-                  className="text-indigo-400 hover:text-indigo-300 text-xs font-semibold"
+                  className="text-indigo-400 hover:text-indigo-300 text-xs font-semibold cursor-pointer"
                 >
                   {isCustom ? '← Choose from Preset List' : '+ Enter Custom Subject'}
                 </button>
@@ -191,12 +192,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     type="text"
                     value={customSubject}
                     onChange={e => setCustomSubject(e.target.value)}
-                    placeholder="Enter any academic or professional subject (e.g. Neuroscience, Organic Chemistry, Macroeconomics)"
+                    placeholder="Enter any subject (e.g. Kubernetes Site Reliability, Quantitative Finance, Cellular Immunology)"
                     className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner transition-colors"
                     required
                   />
                   <p className="text-[11px] text-slate-400">
-                    PLIA dynamically generates questions, vector embeddings, and rubric criteria for any legitimate subject.
+                    PLIA dynamically synthesizes real-world incident cases, vector embeddings, and rubric criteria for any subject.
                   </p>
                 </div>
               ) : (
@@ -219,7 +220,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
                             {subj.name}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-1 line-clamp-1">{subj.desc}</p>
+                        <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
+                          {subj.desc}
+                        </p>
                       </div>
                     );
                   })}
@@ -227,36 +230,35 @@ export const HomeView: React.FC<HomeViewProps> = ({
               )}
             </div>
 
-            {/* Learning Goal */}
+            {/* Specific Goal */}
             <div className="space-y-2">
               <label htmlFor="learning-goal-input" className="block text-xs font-medium text-slate-300">
-                Primary Learning Goal
+                Primary Goal or Capstone Focus
               </label>
               <input
                 id="learning-goal-input"
                 type="text"
                 value={goal}
                 onChange={e => setGoal(e.target.value)}
-                placeholder={`e.g. Master core principles and applications in ${selectedSubject}`}
+                placeholder={`e.g. Master real-world debugging, design scalable architectures, pass technical exams`}
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner transition-colors"
               />
             </div>
 
-            {/* Experience Level & Available Study Time */}
+            {/* Experience Level & Time */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Experience Level */}
               <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-300">Self-Assessed Baseline</label>
+                <label className="block text-xs font-medium text-slate-300">Prior Experience</label>
                 <div className="grid grid-cols-3 gap-1.5">
                   {(['beginner', 'intermediate', 'advanced'] as const).map(lvl => (
                     <button
                       key={lvl}
                       type="button"
                       onClick={() => setExperienceLevel(lvl)}
-                      className={`py-2 px-2 rounded-xl text-xs font-medium capitalize border transition-all ${
+                      className={`py-2 text-xs font-semibold rounded-xl capitalize transition-all cursor-pointer ${
                         experienceLevel === lvl
-                          ? 'bg-indigo-600 border-indigo-500 text-white shadow-md shadow-indigo-500/20'
-                          : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
                       }`}
                     >
                       {lvl}
@@ -265,100 +267,95 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 </div>
               </div>
 
-              {/* Available Time */}
               <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-300">Available Time</label>
+                <label htmlFor="available-time-select" className="block text-xs font-medium text-slate-300">
+                  Daily Commitment
+                </label>
                 <select
+                  id="available-time-select"
                   value={availableTime}
                   onChange={e => setAvailableTime(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner transition-colors"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                 >
-                  <option value="15 mins / day">15 mins / day (Bite-sized)</option>
-                  <option value="30 mins / day">30 mins / day (Standard)</option>
-                  <option value="45 mins / day">45 mins / day (Intensive)</option>
-                  <option value="60+ mins / day">60+ mins / day (Deep Focus)</option>
+                  <option value="15 mins / day">15 mins / day (Quick Drill)</option>
+                  <option value="30 mins / day">30 mins / day (Standard Practice)</option>
+                  <option value="60 mins / day">60 mins / day (Deep Immersion)</option>
+                  <option value="Weekend Intensive">Weekend Intensive (Project-Based)</option>
                 </select>
               </div>
             </div>
 
             {/* Submit Button */}
-            <button
-              id="start-diagnostic-submit-btn"
-              type="submit"
-              className="w-full py-3.5 px-6 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm sm:text-base flex items-center justify-center space-x-2 shadow-lg shadow-indigo-500/20 transition-all hover:scale-[1.01]"
-            >
-              <span>Start Personalized Diagnostic</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            <div className="pt-2">
+              <button
+                id="start-diagnostic-btn"
+                type="submit"
+                className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white font-bold text-sm flex items-center justify-center space-x-2 shadow-lg shadow-indigo-950/50 transition-all cursor-pointer"
+              >
+                <span>Launch Adaptive AI Diagnostic</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
           </form>
         </div>
 
-        {/* Right Column: Architectural Principles & Evidence Framework */}
-        <div className="lg:col-span-5 space-y-5">
-          {/* Key Principles Card */}
-          <div className="bg-[#0F172A] border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+        {/* Right Column: Key Modern Features & Architecture */}
+        <div className="lg:col-span-5 space-y-6">
+          <div className="bg-[#0F172A] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl space-y-5">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center space-x-2">
               <Brain className="w-4 h-4 text-emerald-400" />
-              <span>Pedagogical Architecture</span>
+              <span>Real-Time AI & Pedagogical Engine</span>
             </h3>
 
-            <div className="space-y-3.5 text-xs text-slate-300">
+            <div className="space-y-4 text-xs text-slate-300">
               <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 rounded-lg bg-emerald-950/60 border border-emerald-800/80 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
+                <div className="w-7 h-7 rounded-xl bg-emerald-950/80 border border-emerald-800/80 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                  <Zap className="w-4 h-4" />
                 </div>
                 <div>
-                  <span className="font-semibold text-white">10–15 Adaptive Questions:</span>
+                  <span className="font-semibold text-white">Dynamic Real-World Incidents:</span>
                   <p className="text-slate-400 mt-0.5">
-                    Questions scale in cognitive complexity (Remember → Understand → Apply → Analyze → Evaluate → Create). Stops adaptively when evidence converges.
+                    Generates novel production incidents, telemetry metrics, and architectural puzzles with Llama at runtime rather than repeating static questions.
                   </p>
                 </div>
               </div>
 
               <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 rounded-lg bg-indigo-950/60 border border-indigo-800/80 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5">
-                  <Database className="w-3.5 h-3.5" />
+                <div className="w-7 h-7 rounded-xl bg-indigo-950/80 border border-indigo-800/80 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5">
+                  <MessageSquare className="w-4 h-4" />
                 </div>
                 <div>
-                  <span className="font-semibold text-white">Embedded Vector Database:</span>
+                  <span className="font-semibold text-white">Socratic Copilot with 4 AI Personas:</span>
                   <p className="text-slate-400 mt-0.5">
-                    Fast local dense vector indexing (<span className="text-indigo-300 font-mono">128-dim cosine</span>) retrieves domain standards, misconceptions, and custom notes in &lt;2ms.
+                    Switch between Socratic Mentor, Senior Tech Lead, Feynman Explainer, and Tough Examiner to debate, test edge cases, and clarify mental models.
                   </p>
                 </div>
               </div>
 
               <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 rounded-lg bg-amber-950/60 border border-amber-800/80 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-                  <BarChart3 className="w-3.5 h-3.5" />
+                <div className="w-7 h-7 rounded-xl bg-purple-950/80 border border-purple-800/80 flex items-center justify-center text-purple-400 shrink-0 mt-0.5">
+                  <RotateCw className="w-4 h-4" />
                 </div>
                 <div>
-                  <span className="font-semibold text-white">Cognitive Learning Stages (1–6):</span>
+                  <span className="font-semibold text-white">Active-Recall Flashcards Arena:</span>
                   <p className="text-slate-400 mt-0.5">
-                    From Foundational Learner to Advanced Creator. Inferred from demonstrated evidence; subject mastery is separated from general cognitive capability.
+                    Uses the SuperMemo SM-2 spaced repetition algorithm with AI-synthesized cards for high-yield active retrieval.
                   </p>
                 </div>
               </div>
 
               <div className="flex items-start space-x-3">
-                <div className="w-6 h-6 rounded-lg bg-cyan-950/60 border border-cyan-800/80 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5">
-                  <ShieldCheck className="w-3.5 h-3.5" />
+                <div className="w-7 h-7 rounded-xl bg-cyan-950/80 border border-cyan-800/80 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5">
+                  <ShieldCheck className="w-4 h-4" />
                 </div>
                 <div>
                   <span className="font-semibold text-white">100% Offline & Private:</span>
                   <p className="text-slate-400 mt-0.5">
-                    Runs on your laptop with Ollama. Zero external API calls, zero telemetry, and all learner data remains strictly local in SQLite / IndexedDB.
+                    Direct local execution on your machine with Ollama. Zero cloud subscriptions, zero telemetry, zero data egress.
                   </p>
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* Educational Disclaimer Pill */}
-          <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-            <span className="font-semibold text-slate-300 block">Educational Notice:</span>
-            <p>
-              PLIA measures <em>Cognitive Learning Stages</em> based on current task performance. It does not measure IQ, neurological age, or clinical psychological traits.
-            </p>
           </div>
         </div>
       </div>

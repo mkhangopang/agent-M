@@ -298,3 +298,53 @@ export interface OllamaConfig {
   mockMode: boolean;
   latencyMs?: number;
 }
+
+export type AICoachPersona = 'socratic' | 'senior_lead' | 'feynman' | 'examiner';
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+  modelUsed?: string;
+  latencyMs?: number;
+  tokensPerSec?: number;
+  persona?: AICoachPersona;
+  vectorGrounding?: string[];
+  suggestedFollowups?: string[];
+  isStreaming?: boolean;
+}
+
+export interface RealWorldSimulationCase {
+  id: string;
+  title: string;
+  subject: string;
+  domain: string;
+  difficulty: 'beginner' | 'intermediate' | 'advanced' | 'expert';
+  bloomLevel: BloomLevel;
+  industryContext: string;
+  incidentOrProblem: string;
+  starterDataOrCode?: string;
+  constraints: string[];
+  actionPrompt: string;
+  expectedCriteria: string[];
+  hints: string[];
+  expertAnalysis?: string;
+}
+
+export interface AIGeneratedFlashcard {
+  id: string;
+  subject: string;
+  domain: string;
+  concept: string;
+  frontPrompt: string;
+  backExplanation: string;
+  bloomLevel: BloomLevel;
+  difficulty: 'easy' | 'medium' | 'hard';
+  repetitions: number;
+  intervalDays: number;
+  easeFactor: number; // SM-2 default 2.5
+  nextReviewDate: string;
+  lastMasteryGrade?: number; // 0-5
+}
+

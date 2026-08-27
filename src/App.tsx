@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Navbar } from './components/Navbar';
+import { Navbar, AppTab } from './components/Navbar';
 import { HomeView } from './components/HomeView';
 import { DiagnosticView } from './components/DiagnosticView';
 import { DiagnosticReportView } from './components/DiagnosticReportView';
 import { DashboardView } from './components/DashboardView';
+import { RealWorldSandboxView } from './components/RealWorldSandboxView';
+import { AIFlashcardArena } from './components/AIFlashcardArena';
+import { AIChatDrawer } from './components/AIChatDrawer';
 import { VectorDbExplorer } from './components/VectorDbExplorer';
 import { ProfileView } from './components/ProfileView';
 import { SettingsView } from './components/SettingsView';
@@ -28,9 +31,7 @@ import {
 } from './lib/pedagogyEngine';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<
-    'home' | 'diagnostic' | 'report' | 'dashboard' | 'vectorDb' | 'profile' | 'settings' | 'pythonBundle'
-  >('home');
+  const [currentTab, setCurrentTab] = useState<AppTab>('home');
 
   const [currentLearner, setCurrentLearner] = useState<LearnerProfile | null>(() => {
     return LocalStorageManager.getCurrentLearner();
@@ -56,6 +57,10 @@ export default function App() {
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [lastEvaluation, setLastEvaluation] = useState<DiagnosticAnswerEvaluation | null>(null);
 
+  // AI Copilot Drawer State
+  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
+  const [chatConceptContext, setChatConceptContext] = useState<string | undefined>(undefined);
+
   // Background health check for Ollama at startup
   useEffect(() => {
     ollamaService.checkHealth().then(res => {
@@ -64,6 +69,11 @@ export default function App() {
       }
     });
   }, []);
+
+  const handleOpenAIChatWithContext = (concept?: string) => {
+    setChatConceptContext(concept);
+    setIsAIChatOpen(true);
+  };
 
   // Update learner profile whenever current learner changes
   const handleSelectProfile = (profile: LearnerProfile) => {
@@ -115,6 +125,21 @@ export default function App() {
     setCurrentTab('diagnostic');
   };
 
+  // Mutate current question with dynamic AI scenario
+  const handleMutateCurrentQuestion = (newQuestion: DiagnosticQuestion) => {
+    if (!activeDiagnostic) return;
+    const questions = [...activeDiagnostic.questionsAsked];
+    questions[activeDiagnostic.currentQuestionIndex] = newQuestion;
+    const updatedState: DiagnosticState = {
+      ...activeDiagnostic,
+      questionsAsked: questions,
+      updatedAt: new Date().toISOString(),
+    };
+    setActiveDiagnostic(updatedState);
+    LocalStorageManager.saveActiveDiagnostic(updatedState);
+    setLastEvaluation(null);
+  };
+
   // Submit Answer to Current Question
   const handleSubmitAnswer = async (
     learnerAnswer: string,
@@ -126,7 +151,6 @@ export default function App() {
     const question = activeDiagnostic.questionsAsked[activeDiagnostic.currentQuestionIndex];
 
     try {
-      // Evaluate response (grounded with local vector DB and Ollama or offline local pedagogical rules)
       const evaluationResult = await ollamaService.generateStructured<DiagnosticAnswerEvaluation>(
         `You are PLIA, an adaptive educational intelligence evaluator. Evaluate the student's answer using Bloom's Taxonomy and the provided scoring rubric. Return valid JSON only with keys: score (0-100), rubricTier ('noUnderstanding'|'partialUnderstanding'|'thoroughUnderstanding'), isMisconception (boolean), feedback ({ whatWasCorrect, whatNeedsImprovement, why, actionableImprovement }), gapsIdentified (array), strengthsIdentified (array).`,
         `Question: ${question.question}\nBloom Level: ${question.bloomLevel}\nDomain: ${question.domain}\nExpected Rubric Criteria: ${JSON.stringify(question.rubric)}\nStudent Answer: "${learnerAnswer}"\nStudent Confidence: ${confidenceRating ?? 'Unspecified'}%`,
@@ -139,7 +163,6 @@ export default function App() {
 
       const evaluation = evaluationResult.data;
 
-      // Update state
       const updatedSubmissions = [
         ...activeDiagnostic.submissions,
         {
@@ -162,32 +185,28 @@ export default function App() {
       setActiveDiagnostic(updatedState);
       LocalStorageManager.saveActiveDiagnostic(updatedState);
       setLastEvaluation(evaluation);
-      setIsEvaluating(false);
+
       return evaluation;
-    } catch (e) {
-      console.warn('Evaluation error, using local fallback:', e);
-      const fallbackEval = evaluateDiagnosticAnswerLocally(question, learnerAnswer, confidenceRating);
-      setLastEvaluation(fallbackEval);
+    } finally {
       setIsEvaluating(false);
-      return fallbackEval;
     }
   };
 
-  // Proceed to Next Question in Adaptive Sequence
+  // Move to next question
   const handleProceedToNext = () => {
     if (!activeDiagnostic) return;
 
     const nextIndex = activeDiagnostic.currentQuestionIndex + 1;
-    let phase: DiagnosticState['currentPhase'] = 'PHASE_C_COGNITIVE';
+    let nextPhase = activeDiagnostic.currentPhase;
 
-    if (nextIndex < 1) phase = 'PHASE_A_INTAKE';
-    else if (nextIndex < 3) phase = 'PHASE_B_BASELINE';
-    else if (nextIndex >= activeDiagnostic.totalEstimatedQuestions - 1) phase = 'PHASE_D_METACOGNITION';
+    if (nextIndex >= 10) nextPhase = 'PHASE_D_METACOGNITIVE';
+    else if (nextIndex >= 6) nextPhase = 'PHASE_C_COGNITIVE_PROBE';
+    else if (nextIndex >= 3) nextPhase = 'PHASE_B_BASELINE_MASTERY';
 
     const updatedState: DiagnosticState = {
       ...activeDiagnostic,
       currentQuestionIndex: nextIndex,
-      currentPhase: phase,
+      currentPhase: nextPhase,
       updatedAt: new Date().toISOString(),
     };
 
@@ -196,72 +215,84 @@ export default function App() {
     setLastEvaluation(null);
   };
 
-  // Complete Diagnostic and Generate Personalized Profile & Pathway
+  // Complete diagnostic and generate profile & pathway
   const handleCompleteDiagnostic = () => {
     if (!activeDiagnostic) return;
 
-    const questions = activeDiagnostic.questionsAsked;
-    const evaluations = activeDiagnostic.evaluations;
+    const completedState: DiagnosticState = {
+      ...activeDiagnostic,
+      isCompleted: true,
+      updatedAt: new Date().toISOString(),
+    };
+    setActiveDiagnostic(completedState);
+    LocalStorageManager.saveActiveDiagnostic(completedState);
 
     const profile = compileLearnerProfile(
       activeDiagnostic.learnerId,
       currentLearner?.name,
       activeDiagnostic.subject,
-      currentLearner?.goal || `Mastery in ${activeDiagnostic.subject}`,
+      currentLearner?.goal || '',
       currentLearner?.experienceLevel || 'intermediate',
       currentLearner?.availableLearningTime || '30 mins / day',
-      questions,
-      evaluations
+      activeDiagnostic.questionsAsked,
+      activeDiagnostic.evaluations
     );
 
     const pathway = generatePersonalizedPathway(profile);
 
-    // Save profile and pathway locally
-    LocalStorageManager.saveLearner(profile);
-    LocalStorageManager.savePathway(pathway);
-    LocalStorageManager.clearActiveDiagnostic();
-
     setCurrentLearner(profile);
     setCurrentPathway(pathway);
-    setActiveDiagnostic(null);
-    setLastEvaluation(null);
+
+    LocalStorageManager.saveLearner(profile);
+    LocalStorageManager.savePathway(pathway);
+    LocalStorageManager.setCurrentLearnerId(profile.learnerId);
+
     setCurrentTab('report');
   };
 
-  // Export profile JSON download
+  // Export profile & pathway as JSON
   const handleExportFullJson = () => {
-    const jsonString = LocalStorageManager.exportFullData();
-    const blob = new Blob([jsonString], { type: 'application/json' });
+    if (!currentLearner) return;
+    const bundle = {
+      exportTimestamp: new Date().toISOString(),
+      learnerProfile: currentLearner,
+      learningPathway: currentPathway,
+      diagnosticSession: activeDiagnostic,
+      vectorDatabaseSample: vectorDb.getAll().slice(0, 10),
+    };
+
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `plia_profile_${currentLearner?.subject || 'data'}_${Date.now()}.json`;
+    a.download = `PLIA_profile_${currentLearner.subject.toLowerCase()}_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="min-h-screen bg-[#0F172A] text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white font-sans">
-      {/* Top Navbar */}
+    <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+      {/* Top Navigation */}
       <Navbar
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         ollamaConfig={ollamaConfig}
-        activeSubject={activeDiagnostic?.subject || currentLearner?.subject}
+        activeSubject={currentLearner?.subject || activeDiagnostic?.subject}
         learnerName={currentLearner?.name}
-        hasActiveDiagnostic={!!activeDiagnostic}
+        hasActiveDiagnostic={!!activeDiagnostic && !activeDiagnostic.isCompleted}
         vectorCount={vectorCount}
+        onToggleAIChat={() => setIsAIChatOpen(prev => !prev)}
+        isAIChatOpen={isAIChatOpen}
       />
 
-      {/* Main Content Area with subtle tech ambient grid */}
-      <main className="flex-1 pb-16 relative">
-        <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none opacity-20" />
-        <div className="relative z-10">
+      {/* Main Content Area */}
+      <main className="flex-1 pb-16">
+        <div className="animate-in fade-in duration-300">
           {currentTab === 'home' && (
             <HomeView
               onStartDiagnostic={handleStartDiagnostic}
               activeProfile={currentLearner}
-              hasActiveDiagnostic={!!activeDiagnostic}
+              hasActiveDiagnostic={!!activeDiagnostic && !activeDiagnostic.isCompleted}
               onResumeDiagnostic={() => setCurrentTab('diagnostic')}
               onGoToDashboard={() => setCurrentTab('dashboard')}
               onGoToReport={() => setCurrentTab('report')}
@@ -271,12 +302,17 @@ export default function App() {
           {currentTab === 'diagnostic' && activeDiagnostic && (
             <DiagnosticView
               diagnosticState={activeDiagnostic}
-              currentQuestion={activeDiagnostic.questionsAsked[activeDiagnostic.currentQuestionIndex]}
+              currentQuestion={
+                activeDiagnostic.questionsAsked[activeDiagnostic.currentQuestionIndex] ||
+                activeDiagnostic.questionsAsked[0]
+              }
               onSubmitAnswer={handleSubmitAnswer}
               onProceedToNext={handleProceedToNext}
               onCompleteDiagnostic={handleCompleteDiagnostic}
               isEvaluating={isEvaluating}
               lastEvaluation={lastEvaluation}
+              onMutateQuestion={handleMutateCurrentQuestion}
+              onOpenAIChat={handleOpenAIChatWithContext}
             />
           )}
 
@@ -289,7 +325,8 @@ export default function App() {
                   name: currentLearner.name,
                   subject: currentLearner.subject,
                   goal: currentLearner.goal,
-                  experienceLevel: currentLearner.experienceLevel === 'unspecified' ? 'intermediate' : currentLearner.experienceLevel,
+                  experienceLevel:
+                    currentLearner.experienceLevel === 'unspecified' ? 'intermediate' : currentLearner.experienceLevel,
                   availableLearningTime: currentLearner.availableLearningTime,
                 });
               }}
@@ -314,17 +351,33 @@ export default function App() {
                   name: currentLearner.name,
                   subject: currentLearner.subject,
                   goal: currentLearner.goal,
-                  experienceLevel: currentLearner.experienceLevel === 'unspecified' ? 'intermediate' : currentLearner.experienceLevel,
+                  experienceLevel:
+                    currentLearner.experienceLevel === 'unspecified' ? 'intermediate' : currentLearner.experienceLevel,
                   availableLearningTime: currentLearner.availableLearningTime,
                 });
               }}
             />
           )}
 
-          {currentTab === 'vectorDb' && (
-            <VectorDbExplorer
-              onVectorCountChange={count => setVectorCount(count)}
+          {/* Real-World Incident & Problem Solver Sandbox */}
+          {currentTab === 'sandbox' && (
+            <RealWorldSandboxView
+              activeSubject={currentLearner?.subject || activeDiagnostic?.subject || 'Computer Science'}
+              ollamaConfig={ollamaConfig}
+              onOpenAIChat={handleOpenAIChatWithContext}
             />
+          )}
+
+          {/* AI Flashcard Arena */}
+          {currentTab === 'flashcards' && (
+            <AIFlashcardArena
+              activeSubject={currentLearner?.subject || activeDiagnostic?.subject || 'Computer Science'}
+              ollamaConfig={ollamaConfig}
+            />
+          )}
+
+          {currentTab === 'vectorDb' && (
+            <VectorDbExplorer onVectorCountChange={count => setVectorCount(count)} />
           )}
 
           {currentTab === 'profile' && (
@@ -337,7 +390,8 @@ export default function App() {
                     name: currentLearner.name,
                     subject: currentLearner.subject,
                     goal: currentLearner.goal,
-                    experienceLevel: currentLearner.experienceLevel === 'unspecified' ? 'intermediate' : currentLearner.experienceLevel,
+                    experienceLevel:
+                      currentLearner.experienceLevel === 'unspecified' ? 'intermediate' : currentLearner.experienceLevel,
                     availableLearningTime: currentLearner.availableLearningTime,
                   });
                 } else {
@@ -364,12 +418,21 @@ export default function App() {
         </div>
       </main>
 
+      {/* Persistent AI Socratic Copilot Drawer */}
+      <AIChatDrawer
+        isOpen={isAIChatOpen}
+        onClose={() => setIsAIChatOpen(false)}
+        ollamaConfig={ollamaConfig}
+        currentSubject={currentLearner?.subject || activeDiagnostic?.subject || 'General Problem Solving'}
+        activeConcept={chatConceptContext}
+      />
+
       {/* Footer */}
       <footer className="border-t border-slate-800 bg-[#0F172A] py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-            <span className="font-semibold text-slate-400">PLIA v1.0 • Personalized Learning Intelligence Agent</span>
+            <span className="font-semibold text-slate-400">PLIA • Personalized Learning Intelligence Agent</span>
           </div>
           <span className="text-[11px] text-slate-400">
             100% Offline • Local Vector DB & Ollama LLM • Zero Cloud Telemetry

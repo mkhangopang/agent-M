@@ -10,17 +10,34 @@ import {
   Terminal,
   Activity,
   Layers,
+  Zap,
+  RotateCw,
+  MessageSquare,
 } from 'lucide-react';
 import { OllamaConfig } from '../types';
 
+export type AppTab =
+  | 'home'
+  | 'diagnostic'
+  | 'report'
+  | 'dashboard'
+  | 'sandbox'
+  | 'flashcards'
+  | 'vectorDb'
+  | 'profile'
+  | 'settings'
+  | 'pythonBundle';
+
 interface NavbarProps {
-  currentTab: 'home' | 'diagnostic' | 'report' | 'dashboard' | 'vectorDb' | 'profile' | 'settings' | 'pythonBundle';
-  setCurrentTab: (tab: 'home' | 'diagnostic' | 'report' | 'dashboard' | 'vectorDb' | 'profile' | 'settings' | 'pythonBundle') => void;
+  currentTab: AppTab;
+  setCurrentTab: (tab: AppTab) => void;
   ollamaConfig: OllamaConfig;
   activeSubject?: string;
   learnerName?: string;
   hasActiveDiagnostic: boolean;
   vectorCount: number;
+  onToggleAIChat: () => void;
+  isAIChatOpen: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -31,9 +48,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   learnerName,
   hasActiveDiagnostic,
   vectorCount,
+  onToggleAIChat,
+  isAIChatOpen,
 }) => {
   return (
-    <header className="sticky top-0 z-50 bg-[#0F172A]/95 backdrop-blur-md border-b border-slate-800 shadow-xl">
+    <header className="sticky top-0 z-40 bg-[#0F172A]/95 backdrop-blur-md border-b border-slate-800 shadow-xl">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Brand Logo & Name */}
@@ -59,8 +78,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Active Status Badges */}
-          <div className="hidden lg:flex items-center space-x-3">
-            {/* Ollama Status Pill with glowing indicator dot */}
+          <div className="hidden xl:flex items-center space-x-3">
+            {/* Ollama Status Pill */}
             <div
               onClick={() => setCurrentTab('settings')}
               className="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium"
@@ -84,7 +103,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </div>
 
-            {/* Vector Database Pill with glowing indicator dot */}
+            {/* Vector Database Pill */}
             <div
               onClick={() => setCurrentTab('vectorDb')}
               className="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-900 rounded-full border border-slate-800 hover:border-slate-700 transition-all text-xs font-medium text-slate-300"
@@ -108,7 +127,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               id="nav-btn-home"
               onClick={() => setCurrentTab('home')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 currentTab === 'home'
                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
@@ -120,14 +139,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               id="nav-btn-diagnostic"
               onClick={() => setCurrentTab('diagnostic')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all relative ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all relative ${
                 currentTab === 'diagnostic'
                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
               }`}
             >
               <span className="flex items-center space-x-1">
-                <Activity className="w-3.5 h-3.5 inline sm:mr-1" />
+                <Activity className="w-3.5 h-3.5 inline sm:mr-0.5" />
                 <span>Diagnostic</span>
               </span>
               {hasActiveDiagnostic && currentTab !== 'diagnostic' && (
@@ -138,56 +157,70 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               id="nav-btn-dashboard"
               onClick={() => setCurrentTab('dashboard')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 currentTab === 'dashboard'
                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
               }`}
             >
               <span className="flex items-center space-x-1">
-                <Layers className="w-3.5 h-3.5 inline sm:mr-1" />
-                <span>Learning Path</span>
+                <Layers className="w-3.5 h-3.5 inline sm:mr-0.5" />
+                <span>Pathway</span>
               </span>
             </button>
 
+            {/* Real-World Sandbox Navigation Tab */}
             <button
-              id="nav-btn-vectordb"
-              onClick={() => setCurrentTab('vectorDb')}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hidden md:flex items-center space-x-1 ${
-                currentTab === 'vectorDb'
+              id="nav-btn-sandbox"
+              onClick={() => setCurrentTab('sandbox')}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center space-x-1 ${
+                currentTab === 'sandbox'
+                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
+                  : 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 border border-emerald-800/40'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Real-World Solver</span>
+            </button>
+
+            {/* Flashcards Navigation Tab */}
+            <button
+              id="nav-btn-flashcards"
+              onClick={() => setCurrentTab('flashcards')}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hidden sm:flex items-center space-x-1 ${
+                currentTab === 'flashcards'
                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
               }`}
             >
-              <Database className="w-3.5 h-3.5" />
-              <span>Vector DB</span>
+              <RotateCw className="w-3.5 h-3.5" />
+              <span>Flashcards</span>
+            </button>
+
+            {/* AI Copilot Toggle Button */}
+            <button
+              id="nav-btn-ai-copilot"
+              onClick={onToggleAIChat}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 shadow-md cursor-pointer ${
+                isAIChatOpen
+                  ? 'bg-indigo-500 text-white ring-2 ring-indigo-400'
+                  : 'bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/80 text-indigo-200'
+              }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-indigo-300" />
+              <span className="hidden md:inline">AI Copilot</span>
             </button>
 
             <button
               id="nav-btn-profile"
               onClick={() => setCurrentTab('profile')}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center space-x-1 ${
+              className={`px-2 py-1.5 rounded-lg text-xs font-medium transition-all hidden sm:flex items-center space-x-1 ${
                 currentTab === 'profile' || currentTab === 'report'
                   ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
               }`}
             >
               <User className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Profile</span>
-            </button>
-
-            <button
-              id="nav-btn-python"
-              onClick={() => setCurrentTab('pythonBundle')}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hidden lg:flex items-center space-x-1 ${
-                currentTab === 'pythonBundle'
-                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
-              }`}
-              title="View standalone Python + Streamlit + SQLite project files"
-            >
-              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Python Files</span>
             </button>
 
             <button
@@ -203,7 +236,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {learnerName && (
               <div
-                className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 hidden sm:flex items-center justify-center text-xs font-bold text-indigo-300"
+                className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 hidden lg:flex items-center justify-center text-xs font-bold text-indigo-300"
                 title={`Learner: ${learnerName}`}
               >
                 {learnerName.slice(0, 2).toUpperCase()}
